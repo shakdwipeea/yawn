@@ -8,8 +8,11 @@
 - as much geometric algebra as reasonable
 - 
 
-## planned features
-- 
+## planned milestone
+
+- connect events from main thread to service worker
+- share canvas b/w sw
+- render triangle
 
 ## 
 - 
