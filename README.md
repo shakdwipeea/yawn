@@ -33,5 +33,17 @@ What algorithms are we planning to have,
 - edge detection?
 - SDFs?
 - animation/bones?
+- spatial audio?
 
 ## are we gon use ogl or start from scratch?
+
+## we need to decide architecture
+- ECS?
+- babylon-like
+- threejs-like
+
+- message passing?
+- observables?
+- events?
+- runnable on a server?
+- worker/main thread adaptable? or just worker?
