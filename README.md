@@ -44,6 +44,14 @@ What algorithms are we planning to have,
 - streaming mesh data? (for progressive loading/nanites/volumetrics/sectors/occlusion-optimised loading)
 - server components? (websockets for mesh streaming)
 - collision sounds?
+- HDR/LDR rendering?
+- tonemapping?
+- lighting bsdf? materials?
+- trails?
+- vfx?
+- vr/ar?
+- dynamic textures?
+- shadow casting?
 
 ## are we gon use ogl or start from scratch?
 
