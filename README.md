@@ -19,6 +19,8 @@ What algorithms are we planning to have,
 - gpu picking?
 - HZB occlusion + frustum/portal culling?
 - deferred + forward lighting?
+- hair/fur support?
+- splines?
 - good auto lod (how?)
 - auto billboarding?
 - selective raytracing? (maybe to bake static lighting on init?)
