@@ -27,13 +27,23 @@ What algorithms are we planning to have,
 - Global Illumination? (how?)
 - postprocesses?
 - physics?
-- simulations? (fluid, cloth, rigid body)
+- simulations? (fluid, cloth, rigid body, wind)
 - g-splats?
 - volumetrics? (openvdb?)
 - edge detection?
 - SDFs?
 - animation/bones?
 - spatial audio?
+- particles?
+- instancing?
+- procedural gen? (providing noise textures, perlin, voronoi)
+- mesh edits/CSG?
+- glass/refraction?
+- nanites?
+- caching?
+- streaming mesh data? (for progressive loading/nanites/volumetrics/sectors/occlusion-optimised loading)
+- server components? (websockets for mesh streaming)
+- collision sounds?
 
 ## are we gon use ogl or start from scratch?
 
