@@ -30,5 +30,6 @@ What algorithms are we planning to have,
 - volumetrics? (openvdb?)
 - edge detection?
 - SDFs?
+- animation/bones?
 
 ## are we gon use ogl or start from scratch?
