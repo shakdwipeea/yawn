@@ -1,3 +1,5 @@
+import { Attribute, draw, ProgramData } from "../gl";
+import { cubeVertices } from "../gl/vertices";
 import { MessageType } from "./mainThread";
 
 const handleConnection = (msg: MessageEvent<any>) => {
@@ -9,17 +11,26 @@ const handleConnection = (msg: MessageEvent<any>) => {
   switch (data[0]) {
     case MessageType.attachCanvas:
       const canvas = data[1];
-      const ctxWorker = canvas.getContext("2d");
+      const dimensions = data[2];
 
-      ctxWorker.clearRect(0, 0, canvas.width, canvas.height);
-      ctxWorker.font = "24px Verdana";
-      ctxWorker.textAlign = "center";
-      ctxWorker.fillText("Hello World", canvas.width / 2, canvas.height / 2);
+      const ctxWorker = canvas.getContext("webgl2");
+      var p: ProgramData<Attribute<Float32Array>> = {
+        vertexShaderSource: "/shaders/triangle/vertex.glsl",
+        fragmentShaderSource: "/shaders/triangle/frag.glsl",
+        attributes: [
+          {
+            name: "position",
+            data: new Float32Array(cubeVertices),
+          },
+        ],
+      };
+
+      requestAnimationFrame(() => draw(ctxWorker, p));
 
       break;
   }
 
   console.log(...data);
-}
+};
 
-export { handleConnection }; 
+export { handleConnection };
