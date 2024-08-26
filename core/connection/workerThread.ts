@@ -11,7 +11,6 @@ const handleConnection = (msg: MessageEvent<any>) => {
   switch (data[0]) {
     case MessageType.attachCanvas:
       const canvas = data[1];
-      const dimensions = data[2];
 
       const ctxWorker = canvas.getContext("webgl2");
       var p: ProgramData<Attribute<Float32Array>> = {
