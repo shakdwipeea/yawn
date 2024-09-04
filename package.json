@@ -13,6 +13,7 @@
     "vite": "^5.3.4"
   },
   "dependencies": {
+    "effection": "^3.0.3",
     "gl-matrix": "^3.4.3",
     "tslog": "^4.9.3"
   }

@@ -1,3 +1,4 @@
+import { run } from "effection";
 import { Attribute, draw, ProgramData } from "../gl";
 import { cubeVertices } from "../gl/vertices";
 import { MessageType } from "./mainThread";
@@ -24,7 +25,11 @@ const handleConnection = (msg: MessageEvent<any>) => {
         ],
       };
 
-      requestAnimationFrame(() => draw(ctxWorker, p));
+      requestAnimationFrame(async () => {
+        await run(function* () {
+          yield* draw(ctxWorker, p);
+        });
+      });
 
       break;
   }

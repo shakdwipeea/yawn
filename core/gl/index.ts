@@ -1,5 +1,6 @@
 import { mat4 } from "gl-matrix";
 import { cubeVertices } from "./vertices";
+import { useAbortSignal, call, all, run } from "effection";
 
 type AttributeDataTypes = Float32Array | Int32Array;
 
@@ -19,17 +20,19 @@ export interface ProgramData<T extends Attribute<AttributeDataTypes>> {
   attributes: T[];
 }
 
-async function fetchShader(path: string) {
-  const response = await fetch(path);
-  return response.text();
+function* fetchShader(path: string) {
+  let signal = yield* useAbortSignal();
+  const response = yield* call(fetch(path, { signal }));
+  const shader = yield* call(response.text());
+  return shader;
 }
 
-async function createShader(
+function* createShader(
   gl: WebGL2RenderingContext,
   type: number,
   sourceFile: string
 ) {
-  const source = await fetchShader(sourceFile);
+  const source = yield* fetchShader(sourceFile);
 
   var shader = gl.createShader(type);
   if (!shader) return;
@@ -38,33 +41,26 @@ async function createShader(
   gl.compileShader(shader);
   var success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
   if (!success) {
-    console.error(gl.getShaderInfoLog(shader)); // eslint-disable-line
+    console.error(gl.getShaderInfoLog(shader));
     gl.deleteShader(shader);
   }
 
   return shader;
 }
 
-async function setupProgram<T extends Attribute<AttributeDataTypes>>(
+function* setupProgram<T extends Attribute<AttributeDataTypes>>(
   gl: WebGL2RenderingContext,
   programData: ProgramData<T>
 ) {
   var program = gl.createProgram();
   if (!program) return;
 
-  var vertexShader = await createShader(
-    gl,
-    gl.VERTEX_SHADER,
-    programData.vertexShaderSource
-  );
-  if (!vertexShader) return;
+  const [vertexShader, fragmentShader] = yield* all([
+    createShader(gl, gl.VERTEX_SHADER, programData.vertexShaderSource),
+    createShader(gl, gl.FRAGMENT_SHADER, programData.fragmentShaderSource),
+  ]);
 
-  var fragmentShader = await createShader(
-    gl,
-    gl.FRAGMENT_SHADER,
-    programData.fragmentShaderSource
-  );
-  if (!fragmentShader) return;
+  if (!vertexShader || !fragmentShader) return;
 
   gl.attachShader(program, vertexShader);
   gl.attachShader(program, fragmentShader);
@@ -103,13 +99,13 @@ function setupAttribute<T extends Attribute<AttributeDataTypes>>(
   gl.vertexAttribPointer(location, 3, gl.FLOAT, false, 5 * 4, 0);
 }
 
-export async function draw<T extends Attribute<AttributeDataTypes>>(
+export function* draw<T extends Attribute<AttributeDataTypes>>(
   gl: WebGL2RenderingContext,
   programData: ProgramData<T>
 ) {
   gl.enable(gl.DEPTH_TEST);
 
-  const program = await setupProgram(gl, programData);
+  const program = yield* setupProgram(gl, programData);
   if (!program) {
     console.error("failed to setup program");
     return;
@@ -152,5 +148,10 @@ export async function draw<T extends Attribute<AttributeDataTypes>>(
 
   gl.drawArrays(gl.TRIANGLES, 0, 36);
 
-  requestAnimationFrame(() => draw(gl, programData));
+  requestAnimationFrame(
+    async () =>
+      await run(function* () {
+        yield* draw(gl, programData);
+      })
+  );
 }
