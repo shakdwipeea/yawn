@@ -11,5 +11,9 @@
   "devDependencies": {
     "typescript": "^5.2.2",
     "vite": "^5.3.4"
+  },
+  "dependencies": {
+    "gl-matrix": "^3.4.3",
+    "tslog": "^4.9.3"
   }
 }
