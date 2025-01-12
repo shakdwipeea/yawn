@@ -12,28 +12,31 @@ const handleConnection = (msg: MessageEvent<any>) => {
     case MessageType.attachCanvas:
       const canvas = data[1];
 
+      // Add canvas sizing
+      // canvas.width = canvas.clientWidth;
+      // canvas.height = canvas.clientHeight;
+
       const ctxWorker = canvas.getContext("webgl2");
+      if (!ctxWorker) {
+        console.error("Failed to get WebGL2 context");
+        return;
+      }
+
       var p: ProgramData = {
         vertexShaderSource: "/shaders/triangle/vertex.glsl",
         fragmentShaderSource: "/shaders/triangle/frag.glsl",
         attributes: [
           {
-            name: "position",
-            data: new Float32Array(cubeVertices),
-            numInstances: 0,
-            stride: 5,
-          },
-          {
             name: "model",
             data: new Float32Array(createModel(0)),
-            numInstances: 2,
+            numInstances: 3,
             stride: 16,
           },
         ],
+        model: "/models/cube.glb",
       };
 
-      requestAnimationFrame(() => draw(ctxWorker, p));
-
+      draw(ctxWorker, p); // Remove requestAnimationFrame for initial testing
       break;
   }
 

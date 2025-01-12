@@ -13,6 +13,8 @@
     "vite": "^5.3.4"
   },
   "dependencies": {
+    "@loaders.gl/core": "^4.3.3",
+    "@loaders.gl/gltf": "^4.3.3",
     "gl-matrix": "^3.4.3",
     "tslog": "^4.9.3"
   }

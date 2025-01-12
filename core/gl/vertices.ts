@@ -26,7 +26,7 @@ export const cubeVertices = [
 export function createModel(i) {
   let model = mat4.create();
   const angle = Date.now() * 0.001;
-  mat4.translate(model, model, [i * 2, 0, 0]);
+  mat4.translate(model, model, [(i % 2 == 0 ? i : -i) * 3, 0, 0]);
   mat4.scale(model, model, [1, 1, 1]);
   mat4.rotate(model, model, angle, [0.5, 1, 0]);
   return model;
