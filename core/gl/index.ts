@@ -1,11 +1,14 @@
-import { mat4 } from "gl-matrix";
-import { cubeVertices } from "./vertices";
+import { mat4, vec3 } from "gl-matrix";
+import { createInstanceData, createModel, cubeVertices } from "./vertices";
 
-type AttributeDataTypes = Float32Array | Int32Array;
+type RawDataTypes = Float32Array | Int32Array;
+type AttributeDataTypes = number[] | RawDataTypes;
 
-export interface Attribute<T> {
+export interface Attribute {
   name: string;
-  data: T;
+  data: Float32Array;
+  numInstances: number;
+  stride: number;
 }
 
 export interface Dimensions {
@@ -13,10 +16,10 @@ export interface Dimensions {
   height: number;
 }
 
-export interface ProgramData<T extends Attribute<AttributeDataTypes>> {
+export interface ProgramData {
   vertexShaderSource: string;
   fragmentShaderSource: string;
-  attributes: T[];
+  attributes: Attribute[];
 }
 
 async function fetchShader(path: string) {
@@ -45,9 +48,9 @@ async function createShader(
   return shader;
 }
 
-async function setupProgram<T extends Attribute<AttributeDataTypes>>(
+async function setupProgram(
   gl: WebGL2RenderingContext,
-  programData: ProgramData<T>
+  programData: ProgramData
 ) {
   var program = gl.createProgram();
   if (!program) return;
@@ -79,33 +82,77 @@ async function setupProgram<T extends Attribute<AttributeDataTypes>>(
   return program;
 }
 
-function setupAttribute<T extends Attribute<AttributeDataTypes>>(
+function processAttribute(
   gl: WebGL2RenderingContext,
   program: WebGLProgram,
-  attribute: T
+  attribute: Attribute
 ) {
-  const location = gl.getAttribLocation(program, attribute.name);
-  if (location === -1) return;
+  let rawData = attribute.data;
+  const stride = attribute.stride;
 
-  // setup a buffer for the attribute data
+  const isMatrix = attribute.stride >= 16;
+
+  if (attribute.numInstances > 1) {
+    rawData = createInstanceData(attribute.numInstances);
+  }
+
+  const baseLocation = gl.getAttribLocation(program, attribute.name);
+  if (baseLocation === -1) {
+    console.error(`failed to get attribute location for ${attribute.name}`);
+    return;
+  }
   const buffer = gl.createBuffer();
-  if (!buffer) return;
+  if (!buffer) {
+    console.error("failed to create buffer");
+    return;
+  }
 
   gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.bufferData(gl.ARRAY_BUFFER, attribute.data, gl.STATIC_DRAW);
+  gl.bufferData(gl.ARRAY_BUFFER, rawData, gl.STATIC_DRAW);
 
-  const vao = gl.createVertexArray();
-  if (!vao) return;
+  if (isMatrix) {
+    // if its more than 4, its a matrix
+    // for which we need to access succesive attribute location
 
-  gl.bindVertexArray(vao);
+    for (let i = 0; i < 4; i++) {
+      const location = baseLocation + i;
+      gl.enableVertexAttribArray(location);
 
-  gl.enableVertexAttribArray(location);
-  gl.vertexAttribPointer(location, 3, gl.FLOAT, false, 5 * 4, 0);
+      if (location === -1) {
+        console.error(
+          `failed to get attribute location for ${attribute.name} at index ${i}`
+        );
+        return;
+      }
+
+      gl.enableVertexAttribArray(location);
+      gl.vertexAttribPointer(
+        location,
+        4,
+        gl.FLOAT,
+        false,
+        stride * 4,
+        i * stride
+      );
+
+      if (attribute.numInstances > 0) {
+        gl.vertexAttribDivisor(location, 1);
+      }
+    }
+    return;
+  }
+
+  gl.enableVertexAttribArray(baseLocation);
+  gl.vertexAttribPointer(baseLocation, 3, gl.FLOAT, false, stride * 4, 0);
+
+  if (attribute.numInstances > 1) {
+    gl.vertexAttribDivisor(baseLocation, 1);
+  }
 }
 
-export async function draw<T extends Attribute<AttributeDataTypes>>(
+export async function draw(
   gl: WebGL2RenderingContext,
-  programData: ProgramData<T>
+  programData: ProgramData
 ) {
   gl.enable(gl.DEPTH_TEST);
 
@@ -117,16 +164,20 @@ export async function draw<T extends Attribute<AttributeDataTypes>>(
 
   gl.useProgram(program);
 
+  const vao = gl.createVertexArray();
+  if (!vao) {
+    console.error("failed to create vertex array object");
+    return;
+  }
+
+  gl.bindVertexArray(vao);
+
   for (const attribute of programData.attributes) {
-    setupAttribute(gl, program, attribute);
+    processAttribute(gl, program, attribute);
   }
 
   let view = mat4.create();
   view = mat4.translate(view, view, [0, 0, -5]);
-
-  let model = mat4.create();
-  const angle = Date.now() * 0.001;
-  model = mat4.rotate(model, model, angle, [0.5, 1, 0]);
 
   const projection = mat4.create();
   mat4.perspective(
@@ -138,11 +189,9 @@ export async function draw<T extends Attribute<AttributeDataTypes>>(
   );
 
   const viewLoc = gl.getUniformLocation(program, "view");
-  const modelLoc = gl.getUniformLocation(program, "model");
   const projectionLoc = gl.getUniformLocation(program, "projection");
 
   gl.uniformMatrix4fv(viewLoc, false, view);
-  gl.uniformMatrix4fv(modelLoc, false, model);
   gl.uniformMatrix4fv(projectionLoc, false, projection);
 
   gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
@@ -150,7 +199,7 @@ export async function draw<T extends Attribute<AttributeDataTypes>>(
   gl.clearColor(0.0, 0.0, 0.0, 1.0);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  gl.drawArrays(gl.TRIANGLES, 0, 36);
+  gl.drawArraysInstanced(gl.TRIANGLES, 0, 36, 2);
 
   requestAnimationFrame(() => draw(gl, programData));
 }

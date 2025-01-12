@@ -3,9 +3,10 @@
 // an attribute is an input (in) to a vertex shader.
 // It will receive data from a buffer
 in vec3 position;
+in vec2 uv;
+in mat4 model;
 
 // uniforms
-uniform mat4 model;
 uniform mat4 view;
 uniform mat4 projection;
 

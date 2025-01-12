@@ -1,3 +1,5 @@
+import { mat4 } from "gl-matrix";
+
 export const cubeVertices = [
   -0.5, -0.5, -0.5, 0.0, 0.0, 0.5, -0.5, -0.5, 1.0, 0.0, 0.5, 0.5, -0.5, 1.0,
   1.0, 0.5, 0.5, -0.5, 1.0, 1.0, -0.5, 0.5, -0.5, 0.0, 1.0, -0.5, -0.5, -0.5,
@@ -20,3 +22,21 @@ export const cubeVertices = [
   -0.5, 0.5, -0.5, 0.0, 1.0, 0.5, 0.5, -0.5, 1.0, 1.0, 0.5, 0.5, 0.5, 1.0, 0.0,
   0.5, 0.5, 0.5, 1.0, 0.0, -0.5, 0.5, 0.5, 0.0, 0.0, -0.5, 0.5, -0.5, 0.0, 1.0,
 ];
+
+export function createModel(i) {
+  let model = mat4.create();
+  const angle = Date.now() * 0.001;
+  mat4.translate(model, model, [i * 2, 0, 0]);
+  mat4.scale(model, model, [1, 1, 1]);
+  mat4.rotate(model, model, angle, [0.5, 1, 0]);
+  return model;
+}
+
+export function createInstanceData(numInstances: number) {
+  let data = new Float32Array(numInstances * 16);
+  for (let i = 0; i < numInstances; i++) {
+    const modelData = createModel(i);
+    data.set(modelData, i * modelData.length);
+  }
+  return data;
+}

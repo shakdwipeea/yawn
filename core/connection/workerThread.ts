@@ -1,5 +1,5 @@
 import { Attribute, draw, ProgramData } from "../gl";
-import { cubeVertices } from "../gl/vertices";
+import { createInstanceData, createModel, cubeVertices } from "../gl/vertices";
 import { MessageType } from "./mainThread";
 
 const handleConnection = (msg: MessageEvent<any>) => {
@@ -13,13 +13,21 @@ const handleConnection = (msg: MessageEvent<any>) => {
       const canvas = data[1];
 
       const ctxWorker = canvas.getContext("webgl2");
-      var p: ProgramData<Attribute<Float32Array>> = {
+      var p: ProgramData = {
         vertexShaderSource: "/shaders/triangle/vertex.glsl",
         fragmentShaderSource: "/shaders/triangle/frag.glsl",
         attributes: [
           {
             name: "position",
             data: new Float32Array(cubeVertices),
+            numInstances: 0,
+            stride: 5,
+          },
+          {
+            name: "model",
+            data: new Float32Array(createModel(0)),
+            numInstances: 2,
+            stride: 16,
           },
         ],
       };
