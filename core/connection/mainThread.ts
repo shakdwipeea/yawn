@@ -58,11 +58,11 @@ const connectWorker = (worker: Worker) => {
 
   document.addEventListener(
     "pointermove",
-    eventPassers[EventTypes.pointermove]
+    eventPassers[EventTypes.pointermove],
   );
   document.addEventListener(
     "pointerdown",
-    eventPassers[EventTypes.pointerdown]
+    eventPassers[EventTypes.pointerdown],
   );
   document.addEventListener("pointerup", eventPassers[EventTypes.pointerup]);
   //
@@ -72,15 +72,15 @@ const connectWorker = (worker: Worker) => {
   const disconnectWorker = () => {
     document.removeEventListener(
       "pointermove",
-      eventPassers[EventTypes.pointermove]
+      eventPassers[EventTypes.pointermove],
     );
     document.removeEventListener(
       "pointerdown",
-      eventPassers[EventTypes.pointerdown]
+      eventPassers[EventTypes.pointerdown],
     );
     document.removeEventListener(
       "pointerup",
-      eventPassers[EventTypes.pointerup]
+      eventPassers[EventTypes.pointerup],
     );
     //
     document.removeEventListener("keydown", eventPassers[EventTypes.keydown]);
@@ -97,11 +97,6 @@ const attachCanvas = (worker: Worker, canvas: HTMLCanvasElement | string) => {
     throw new Error("Fatal: Canvas Not Found!");
   }
 
-  // set canvas dimensions
-  // if this is not done, the canvas passed to the web worker
-  // will have the default size of 300x150
-  // this will cause the viewport to be set to the default size
-  // and eveything will be messed up
   canvas.width = canvas.clientWidth;
   canvas.height = canvas.clientHeight;
 
