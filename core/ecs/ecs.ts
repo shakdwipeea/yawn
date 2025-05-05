@@ -11,9 +11,11 @@ namespace ECS {
 }
 
 class ECS<ComponentsType extends Record<string | number, any>> {
-  private uid = -1;
-
   private components: ComponentMap<ComponentsType> = { uid: [] };
+  private componentDefaults: Record<
+    string,
+    null | ComponentsType[keyof ComponentsType]
+  > = { uid: null };
   private systems: Record<string, ECS.System<ComponentsType>> = {};
 
   /**
@@ -53,20 +55,34 @@ class ECS<ComponentsType extends Record<string | number, any>> {
     delete this.systems[id];
   }
 
+  getById(uid: number) {
+    if (this.components.uid.length <= uid) return {};
+
+    const obj = {} as Record<string, unknown>;
+
+    for (const key in this.components) {
+      obj[key] = this.components[key]![uid];
+    }
+
+    return obj;
+  }
+
   /**
    * Entity
    */
   addEntity(components: ComponentsType) {
-    this.uid++;
-
     for (const key in this.components) {
       if (key === "uid") {
-        this.components[key].push(this.uid);
+        this.components[key].push(this.components[key].length);
         continue;
       }
 
-      this.components[key]!.push(components[key] ?? null);
+      this.components[key]!.push(
+        components[key] ?? this.componentDefaults[key],
+      );
     }
+
+    return this.components.uid.length - 1;
   }
 
   /**
@@ -74,13 +90,16 @@ class ECS<ComponentsType extends Record<string | number, any>> {
    */
   addComponent(
     name: keyof ComponentsType,
+    fillValue = null as null | ComponentsType[keyof ComponentsType],
     defaultValue = null as null | ComponentsType[keyof ComponentsType],
   ) {
     if (this.components[name]) throw new Error("Component already exists");
 
     this.components[name] = new Array(this.components.uid.length).fill(
-      defaultValue,
+      fillValue,
     ) as ComponentMap<ComponentsType>[keyof ComponentsType];
+
+    this.componentDefaults[name as string] = defaultValue;
   }
 
   removeComponent(name: keyof ComponentsType) {

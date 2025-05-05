@@ -1,6 +1,13 @@
-import { Attribute, draw, ProgramData } from "../gl";
-import { cubeVertices } from "../gl/vertices";
+import { Engine } from "../renderer/engine";
 import { MessageType } from "./mainThread";
+
+const cubeVertices = [
+  1, -1, 1, -1, -1, 1, -1, 1, 1, 1, -1, 1, -1, 1, 1, 1, 1, 1, 1, 1, -1, -1, 1,
+  -1, -1, -1, -1, 1, 1, -1, -1, -1, -1, 1, -1, -1, 1, 1, -1, 1, -1, -1, 1, -1,
+  1, 1, 1, -1, 1, -1, 1, 1, 1, 1, -1, 1, 1, -1, -1, 1, -1, -1, -1, -1, 1, 1, -1,
+  -1, -1, -1, 1, -1, -1, 1, 1, -1, 1, -1, 1, 1, -1, -1, 1, 1, 1, 1, -1, 1, 1, 1,
+  1, -1, 1, 1, -1, -1, -1, -1, -1, 1, -1, 1, -1, -1, -1, -1, -1, 1,
+];
 
 const handleConnection = (msg: MessageEvent<any>) => {
   const { data } = msg;
@@ -12,19 +19,19 @@ const handleConnection = (msg: MessageEvent<any>) => {
     case MessageType.attachCanvas:
       const canvas = data[1];
 
-      const ctxWorker = canvas.getContext("webgl2");
-      var p: ProgramData<Attribute<Float32Array>> = {
-        vertexShaderSource: "/shaders/triangle/vertex.glsl",
-        fragmentShaderSource: "/shaders/triangle/frag.glsl",
-        attributes: [
-          {
-            name: "position",
-            data: new Float32Array(cubeVertices),
-          },
-        ],
+      const engine = new Engine(canvas);
+      const scene = engine.createScene();
+      scene.addMesh("box", cubeVertices);
+      scene.addCamera("cam", true);
+
+      const raf = () => {
+        requestAnimationFrame(() => {
+          scene.runSystems();
+          raf();
+        });
       };
 
-      requestAnimationFrame(() => draw(ctxWorker, p));
+      raf();
 
       break;
   }
