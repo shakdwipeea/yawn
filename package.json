@@ -10,7 +10,8 @@
   },
   "devDependencies": {
     "typescript": "^5.2.2",
-    "vite": "^5.3.4"
+    "vite": "^5.3.4",
+    "vite-plugin-glsl": "^1.4.1"
   },
   "dependencies": {
     "gl-matrix": "^3.4.3",
