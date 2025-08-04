@@ -1,20 +1,25 @@
 {
-  "name": "yawn",
-  "private": true,
-  "version": "0.0.0",
   "type": "module",
+  "author": "ecoricemon",
+  "name": "basic",
+  "version": "0.1.0",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "wasm-dev": "wasm-pack build --dev --out-name wasm-index --target web .",
+    "wasm-release": "wasm-pack build --release --out-name wasm-index --target web .",
+    "bundle-dev": "vite build --mode development",
+    "bundle-release": "vite build",
+    "build": "run-s clean wasm-dev bundle-dev",
+    "build-release": "run-s clean wasm-release bundle-release",
+    "start": "vite preview",
+    "clean": "rimraf --glob dist **/pkg",
+    "clean-all": "rimraf --glob dist **/pkg target node_modules"
   },
   "devDependencies": {
-    "typescript": "^5.2.2",
-    "vite": "^5.3.4",
-    "vite-plugin-glsl": "^1.4.1"
-  },
-  "dependencies": {
-    "gl-matrix": "^3.4.3",
-    "tslog": "^4.9.3"
+    "@wasm-tool/wasm-pack-plugin": "^1.7.0",
+    "vite": "^5.1.6",
+    "vite-plugin-wasm": "^3.3.0",
+    "rollup-plugin-copy": "^3.5.0",
+    "rimraf": "^5.0.1",
+    "npm-run-all": "^4.1.5"
   }
 }
