@@ -10,15 +10,17 @@ export default defineConfig({
     },
     // Relative to 'root'.
     outDir: "../dist",
+    copyPublicDir: true,
   },
   // For getting out of index.html from dist/static directory.
   root: "static",
+  publicDir: ".",
   worker: {
     format: "es",
   },
   resolve: {
     alias: {
-      'pkg': '/home/akash/workspace/yawn/pkg'
+      'pkg': 'pkg'
     }
   },
   plugins: [
@@ -31,6 +33,9 @@ export default defineConfig({
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
+    },
+    fs: {
+      strict: false,
     },
   },
   preview: {
