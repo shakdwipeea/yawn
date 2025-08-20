@@ -4,8 +4,8 @@
   "name": "basic",
   "version": "0.1.0",
   "scripts": {
-    "wasm-dev": "wasm-pack build --dev --out-name wasm-index --target web .",
-    "wasm-release": "wasm-pack build --release --out-name wasm-index --target web .",
+    "wasm-dev": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
+    "wasm-release": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
     "bundle-dev": "vite build --mode development",
     "bundle-release": "vite build",
     "build": "run-s clean wasm-dev bundle-dev",

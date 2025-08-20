@@ -7,16 +7,22 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+atomics = []
+bulk-memory = []
+
 [profile.release]
 opt-level = "z"
 lto = true
 
 [dependencies]
-wasm-bindgen = "0.2.100"
+wasm-bindgen = { version = "0.2.100", features = ["enable-interning"] }
 wasm-bindgen-futures = "0.4.50"
 console_error_panic_hook = "0.1.7"
 console_log = "1.0.0"
 log = "0.4.27"
+wasm-logger = "0.2.0"
 web-sys = { version = "0.3.77", features = [
     "Window",
     "Document",
@@ -39,3 +45,10 @@ bytemuck = { version = "1.23.1", features = [
 cgmath = "0.18"
 raw-window-handle = "0.6.2"
 wgpu = "26.0.1"
+
+[dependencies.gltf]
+version = "1.4"
+features = ["extras", "names"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

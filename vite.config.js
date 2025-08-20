@@ -10,11 +10,18 @@ export default defineConfig({
     },
     // Relative to 'root'.
     outDir: "../dist",
+    copyPublicDir: true,
   },
   // For getting out of index.html from dist/static directory.
   root: "static",
+  publicDir: ".",
   worker: {
     format: "es",
+  },
+  resolve: {
+    alias: {
+      'pkg': 'pkg'
+    }
   },
   plugins: [
     // Makes us be able to use top level await for wasm.
@@ -23,8 +30,19 @@ export default defineConfig({
   ],
   server: {
     port: 8080,
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    },
+    fs: {
+      strict: false,
+    },
   },
   preview: {
     port: 8080,
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    },
   },
 });

@@ -1,10 +1,13 @@
-import wbg_init, { main, App } from "../pkg/wasm-index.js";
+import wbg_init, { main } from "../pkg/wasm-index.js";
 
 const start = async () => {
   await wbg_init();
-
   main();
-  const app = new App();
 };
 
-start();
+// Wait for DOM to be ready before starting
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', start);
+} else {
+  start();
+}
