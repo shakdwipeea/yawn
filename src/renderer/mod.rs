@@ -1,11 +1,15 @@
 use std::{cell::RefCell, rc::Rc, sync::mpsc::Receiver};
 
-use log::info;
+use log::{error, info};
 use wasm_bindgen::{prelude::Closure, JsCast};
+use wasm_bindgen_futures::spawn_local;
 use web_sys::DedicatedWorkerGlobalScope;
 use wgpu::util::DeviceExt;
 
-use crate::message::{MouseMessage, ResizeMessage, WindowEvent};
+use crate::{
+    gltf::{load_gltf_model, ImportError},
+    message::{MouseMessage, ResizeMessage, WindowEvent},
+};
 
 /// Drawing relative data.
 /// Note that this belongs to main worker.
@@ -16,13 +20,15 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface_config: wgpu::SurfaceConfiguration,
-    vertex_buffer: wgpu::Buffer,
+    vertex_buffers: Vec<wgpu::Buffer>,
     index_buffer: wgpu::Buffer,
     index_num: u32,
+    index_format: wgpu::IndexFormat,
     uniform_data: UniformData,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
+    pipeline_layout: wgpu::PipelineLayout,
 }
 
 impl Renderer {
@@ -106,10 +112,17 @@ impl Renderer {
             label: Some("Shader module"),
             source: wgpu::ShaderSource::Wgsl(include_str!("../example.wgsl").into()),
         });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render pipeline layout"),
+            bind_group_layouts: &[&uniform_layout],
+            push_constant_ranges: &[],
+        });
+
         // wgpu render pipeline
         let render_pipeline = Renderer::create_render_pipeline(
             &device,
-            &[&uniform_layout],
+            &pipeline_layout,
             &shader_module,
             &surface_config,
         );
@@ -121,13 +134,15 @@ impl Renderer {
             device,
             queue,
             surface_config,
-            vertex_buffer,
+            vertex_buffers: vec![vertex_buffer],
             index_buffer,
             index_num: INDICES.len() as u32,
+            index_format: wgpu::IndexFormat::Uint32,
             uniform_data,
             uniform_buffer,
             uniform_bind_group,
             render_pipeline,
+            pipeline_layout,
         }
     }
 
@@ -166,20 +181,14 @@ impl Renderer {
 
     fn create_render_pipeline(
         device: &wgpu::Device,
-        bind_group_layouts: &[&wgpu::BindGroupLayout],
+        pipeline_layout: &wgpu::PipelineLayout,
         shader_module: &wgpu::ShaderModule,
         surface_config: &wgpu::SurfaceConfiguration,
     ) -> wgpu::RenderPipeline {
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render pipeline layout"),
-                bind_group_layouts,
-                push_constant_ranges: &[],
-            });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             cache: None,
             label: Some("Render pipeline"),
-            layout: Some(&render_pipeline_layout),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 module: shader_module,
@@ -254,8 +263,12 @@ impl Renderer {
                 timestamp_writes: None,
             });
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            for (i, buffer) in self.vertex_buffers.iter().enumerate() {
+                render_pass.set_vertex_buffer(i as u32, buffer.slice(..));
+            }
+
+            render_pass.set_index_buffer(self.index_buffer.slice(..), self.index_format);
             render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
             render_pass.draw_indexed(0..self.index_num, 0, 0..1);
         }
@@ -263,23 +276,46 @@ impl Renderer {
         surface_texture.present();
     }
 
-    pub fn handle_event(&mut self, event: WindowEvent) {
+    pub async fn handle_event(renderer: Rc<RefCell<Self>>, event: WindowEvent) {
         match event {
-            WindowEvent::PointerMove(msg) => self.mouse_move(msg),
-            WindowEvent::Resize(msg) => self.resize(msg),
-            WindowEvent::PointerClick(msg) => self.mouse_click(msg),
+            WindowEvent::PointerMove(msg) => {
+                renderer.borrow_mut().mouse_move(msg);
+            }
+            WindowEvent::Resize(msg) => {
+                renderer.borrow_mut().resize(msg);
+            }
+            WindowEvent::PointerClick(msg) => {
+                // Update uniform data synchronously
+                {
+                    let mut r = renderer.borrow_mut();
+                    let x = (msg.offset_x * msg.scale_factor) as f32;
+                    let y = (msg.offset_y * msg.scale_factor) as f32;
+                    r.uniform_data.mouse_click = [x, y];
+                    log::info!("clicked");
+                }
+                // Then async work without holding borrow
+                if let Err(e) = Self::load_assets_async(renderer.clone()).await {
+                    log::error!("failed to load gltf: {e}");
+                }
+            }
         }
     }
 
     pub fn run_render_loop(renderer: Rc<RefCell<Renderer>>) {
         let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
             {
-                let mut r = renderer.borrow_mut();
+                let event = { renderer.borrow_mut().events_chan.try_recv() };
 
-                if let Ok(event) = r.events_chan.try_recv() {
-                    r.handle_event(event);
+                if let Ok(event) = event {
+                    let renderer_clone = renderer.clone();
+                    spawn_local(async move {
+                        Self::handle_event(renderer_clone, event).await;
+                    });
                 }
+            }
 
+            {
+                let mut r = renderer.borrow_mut();
                 r.render(time);
             }
 
@@ -293,6 +329,23 @@ impl Renderer {
             .unwrap();
 
         render_frame.forget();
+    }
+
+    pub async fn load_assets(&mut self) -> Result<(), ImportError> {
+        let render_info = load_gltf_model(
+            &self.device,
+            &self.pipeline_layout,
+            self.surface_config.format,
+        )
+        .await?;
+
+        self.vertex_buffers = render_info.vertex_buffers;
+        self.index_buffer = render_info.index_buffer;
+        self.render_pipeline = render_info.pipeline;
+        self.index_num = render_info.index_count;
+        self.index_format = render_info.index_format;
+
+        Ok(())
     }
 
     fn resize(&mut self, msg: ResizeMessage) {
@@ -326,6 +379,33 @@ impl Renderer {
         let x = (msg.offset_x * msg.scale_factor) as f32;
         let y = (msg.offset_y * msg.scale_factor) as f32;
         self.uniform_data.mouse_click = [x, y];
+    }
+
+    pub async fn load_assets_async(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
+        // Take a short immutable borrow to clone what we need for async work
+        let (device, pipeline_layout, surface_format) = {
+            let r = renderer.borrow();
+            (
+                r.device.clone(),
+                r.pipeline_layout.clone(),
+                r.surface_config.format,
+            )
+        };
+
+        // Perform async load without holding any RefCell borrow
+        let render_info = load_gltf_model(&device, &pipeline_layout, surface_format).await?;
+
+        // Install results with a short mutable borrow
+        {
+            let mut r = renderer.borrow_mut();
+            r.vertex_buffers = render_info.vertex_buffers;
+            r.index_buffer = render_info.index_buffer;
+            r.render_pipeline = render_info.pipeline;
+            r.index_num = render_info.index_count;
+            r.index_format = render_info.index_format;
+        }
+
+        Ok(())
     }
 }
 
@@ -388,5 +468,3 @@ struct UniformData {
     time: f32,
     _padding: f32,
 }
-
-

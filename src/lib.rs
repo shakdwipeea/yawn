@@ -5,9 +5,11 @@ use wasm_bindgen::prelude::*;
 
 use crate::{message::WindowEvent, platform::web, platform::web::worker::MainWorker};
 
+mod gltf;
 mod message;
 mod platform;
 mod renderer;
+
 #[cfg(target_arch = "wasm32")]
 pub struct App {
     _worker: platform::web::worker::MainWorker,
@@ -39,7 +41,7 @@ impl App {
         };
 
         app.setup_event_listeners();
-        return Ok(app);
+        Ok(app)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -100,7 +102,6 @@ impl App {
 #[wasm_bindgen]
 pub fn main() {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-    console_log::init_with_level(log::Level::Info).unwrap();
     wasm_logger::init(wasm_logger::Config::default());
 
     wasm_bindgen_futures::spawn_local(async {
@@ -116,5 +117,3 @@ pub fn worker_entrypoint(ptr: u32) {
     let work = unsafe { Box::from_raw(ptr as *mut Box<dyn FnOnce()>) };
     (*work)();
 }
-
-
