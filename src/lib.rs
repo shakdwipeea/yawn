@@ -5,6 +5,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::{message::WindowEvent, platform::web, platform::web::worker::MainWorker};
 
+mod camera;
 mod gltf;
 mod message;
 mod platform;
@@ -18,6 +19,7 @@ pub struct App {
     // Store closures to keep them alive
     resize_listener: Option<Closure<dyn FnMut()>>,
     mousemove_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
+    mousedown_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
 }
 
 impl App {
@@ -38,6 +40,7 @@ impl App {
             worker_chan: sender,
             resize_listener: None,
             mousemove_listener: None,
+            mousedown_listener: None,
         };
 
         app.setup_event_listeners();
@@ -72,6 +75,9 @@ impl App {
         let mousemove_listener: Closure<dyn FnMut(web_sys::MouseEvent)> =
             Closure::new(move |event: web_sys::MouseEvent| {
                 use crate::message::MouseMessage;
+                if event.buttons() & 0x04 != 0 {
+                    event.prevent_default();
+                }
                 let mouse_event_data = MouseMessage::from_evt(event.clone());
 
                 let mut event_data = WindowEvent::PointerMove(mouse_event_data.clone());
@@ -93,8 +99,23 @@ impl App {
             .add_event_listener_with_callback("click", mousemove_listener.as_ref().unchecked_ref())
             .unwrap();
 
+        let mousedown_listener: Closure<dyn FnMut(web_sys::MouseEvent)> =
+            Closure::new(move |event: web_sys::MouseEvent| {
+                if event.button() == 1 {
+                    event.prevent_default();
+                }
+            });
+
+        let _ = window
+            .add_event_listener_with_callback(
+                "mousedown",
+                mousedown_listener.as_ref().unchecked_ref(),
+            )
+            .unwrap();
+
         self.resize_listener = Some(resize_listener);
         self.mousemove_listener = Some(mousemove_listener);
+        self.mousedown_listener = Some(mousedown_listener);
     }
 }
 

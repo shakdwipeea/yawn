@@ -1,6 +1,27 @@
 use gltf::Gltf;
-use log::info;
-use wgpu::{util::DeviceExt, BufferUsages, PipelineCompilationOptions, TextureFormat};
+use ultraviolet::{Mat4, Vec3, Vec4};
+use wgpu::TextureFormat;
+
+use crate::renderer::scene::{mesh_vertex_layout, MeshBuilder};
+
+#[derive(Clone, Copy, Debug)]
+pub struct ModelBounds {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+impl ModelBounds {
+    fn new(min: [f32; 3], max: [f32; 3]) -> Self {
+        Self { min, max }
+    }
+
+    fn include_point(&mut self, point: [f32; 3]) {
+        for i in 0..3 {
+            self.min[i] = self.min[i].min(point[i]);
+            self.max[i] = self.max[i].max(point[i]);
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
@@ -14,223 +35,190 @@ pub enum ImportError {
     LoadError,
 }
 
-struct GltfVertex {
-    pos: [f32; 3],
-    normals: [f32; 3],
-    uv: [f32; 2],
-}
+fn convert_tex_coords(tex_coords: gltf::mesh::util::ReadTexCoords<'_>) -> Vec<[f32; 2]> {
+    use gltf::mesh::util::ReadTexCoords;
 
-#[derive(Debug, Clone)]
-pub struct AttributeIndex {
-    pub offset: usize,
-    pub length: usize,
-}
-
-impl GltfVertex {
-    fn non_interleaved_layout() -> [wgpu::VertexBufferLayout<'static>; 3] {
-        [
-            wgpu::VertexBufferLayout {
-                array_stride: 12,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                }],
-            },
-            wgpu::VertexBufferLayout {
-                array_stride: 12,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x3,
-                }],
-            },
-            wgpu::VertexBufferLayout {
-                array_stride: 8,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x2,
-                }],
-            },
-        ]
+    match tex_coords {
+        ReadTexCoords::F32(iter) => iter.collect(),
+        ReadTexCoords::U16(iter) => iter
+            .map(|[u, v]| [u as f32 / u16::MAX as f32, v as f32 / u16::MAX as f32])
+            .collect(),
+        ReadTexCoords::U8(iter) => iter
+            .map(|[u, v]| [u as f32 / u8::MAX as f32, v as f32 / u8::MAX as f32])
+            .collect(),
     }
 }
 
-pub struct NonInterleavedRenderInfo {
-    pub vertex_buffers: Vec<wgpu::Buffer>,
-    pub index_buffer: wgpu::Buffer,
-    pub pipeline: wgpu::RenderPipeline,
-    pub index_count: u32,
-    pub index_format: wgpu::IndexFormat,
+fn convert_indices(indices: gltf::mesh::util::ReadIndices<'_>) -> Vec<u32> {
+    use gltf::mesh::util::ReadIndices;
+
+    match indices {
+        ReadIndices::U8(iter) => iter.map(|i| i as u32).collect(),
+        ReadIndices::U16(iter) => iter.map(|i| i as u32).collect(),
+        ReadIndices::U32(iter) => iter.collect(),
+    }
 }
 
-impl NonInterleavedRenderInfo {
-    pub fn new(
-        device: &wgpu::Device,
-        pipeline_layout: &wgpu::PipelineLayout,
-        surface_format: TextureFormat,
-        data_blob: Vec<u8>,
-        attribute_slices: Vec<AttributeIndex>,
-        indices: AttributeIndex,
-        index_format: wgpu::IndexFormat,
-    ) -> Result<Self, ImportError> {
-        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader module"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("./gltf.wgsl").into()),
-        });
+fn mat4_from_gltf(matrix: [[f32; 4]; 4]) -> Mat4 {
+    Mat4::new(
+        Vec4::new(matrix[0][0], matrix[0][1], matrix[0][2], matrix[0][3]),
+        Vec4::new(matrix[1][0], matrix[1][1], matrix[1][2], matrix[1][3]),
+        Vec4::new(matrix[2][0], matrix[2][1], matrix[2][2], matrix[2][3]),
+        Vec4::new(matrix[3][0], matrix[3][1], matrix[3][2], matrix[3][3]),
+    )
+}
 
-        let vertex_buffers = attribute_slices
-            .iter()
-            .enumerate()
-            .map(|(i, slice)| {
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("gltf vertex buffer {}", i)),
-                    contents: &data_blob[slice.offset..slice.offset + slice.length],
-                    usage: BufferUsages::VERTEX,
+fn visit_node<'a>(
+    node: gltf::Node<'a>,
+    parent_transform: Mat4,
+    device: &wgpu::Device,
+    resources: &mut crate::renderer::GpuResources,
+    meshes: &mut Vec<crate::renderer::scene::Mesh>,
+    data_blob: &[u8],
+    pipeline_index: usize,
+    model_bounds: &mut Option<ModelBounds>,
+) {
+    let local_transform = mat4_from_gltf(node.transform().matrix());
+    let world_transform = parent_transform * local_transform;
+    let normal_matrix = world_transform.inversed().transposed();
+
+    if let Some(mesh) = node.mesh() {
+        for primitive in mesh.primitives() {
+            let reader = primitive.reader(|buffer| match buffer.source() {
+                gltf::buffer::Source::Bin => Some(&data_blob[..]),
+                _ => None,
+            });
+
+            let mut positions: Vec<[f32; 3]> = match reader.read_positions() {
+                Some(iter) => iter.collect(),
+                None => Vec::new(),
+            };
+
+            if positions.is_empty() {
+                continue;
+            }
+
+            let vertex_count = positions.len();
+
+            let default_normal_vec = normal_matrix.transform_vec3(Vec3::unit_y()).normalized();
+            let default_normal = [
+                default_normal_vec.x,
+                default_normal_vec.y,
+                default_normal_vec.z,
+            ];
+
+            let mut normals: Vec<[f32; 3]> = reader
+                .read_normals()
+                .map(|iter| {
+                    iter.map(|normal| {
+                        let vec = Vec3::new(normal[0], normal[1], normal[2]);
+                        let transformed = normal_matrix.transform_vec3(vec).normalized();
+                        [transformed.x, transformed.y, transformed.z]
+                    })
+                    .collect()
                 })
-            })
-            .collect();
+                .unwrap_or_else(|| vec![default_normal; vertex_count]);
 
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("gltf index buffer"),
-            contents: &data_blob.as_slice()[indices.offset..indices.offset + indices.length],
-            usage: BufferUsages::INDEX,
-        });
+            if normals.len() != vertex_count {
+                normals.resize(vertex_count, default_normal);
+            }
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("gltf render pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader_module,
-                entry_point: Some("vs_main"),
-                compilation_options: PipelineCompilationOptions::default(),
-                buffers: &GltfVertex::non_interleaved_layout(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                unclipped_depth: false,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader_module,
-                entry_point: Some("fs_main"),
-                compilation_options: PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview: None,
-            cache: None,
-        });
+            let mut uvs: Vec<[f32; 2]> = reader
+                .read_tex_coords(0)
+                .map(convert_tex_coords)
+                .unwrap_or_else(|| vec![[0.0, 0.0]; vertex_count]);
 
-        let index_size = match index_format {
-            wgpu::IndexFormat::Uint16 => 2,
-            wgpu::IndexFormat::Uint32 => 4,
-        };
+            if uvs.len() != vertex_count {
+                uvs.resize(vertex_count, [0.0, 0.0]);
+            }
 
-        Ok(Self {
-            vertex_buffers,
-            index_buffer,
-            pipeline,
-            index_count: (indices.length / index_size) as u32,
-            index_format,
-        })
+            for position in &mut positions {
+                let vec = Vec3::new(position[0], position[1], position[2]);
+                let transformed = world_transform.transform_point3(vec);
+                *position = [transformed.x, transformed.y, transformed.z];
+            }
+
+            for position in &positions {
+                if let Some(bounds) = model_bounds.as_mut() {
+                    bounds.include_point(*position);
+                } else {
+                    *model_bounds = Some(ModelBounds::new(*position, *position));
+                }
+            }
+
+            let indices: Vec<u32> = reader
+                .read_indices()
+                .map(convert_indices)
+                .unwrap_or_else(|| (0..vertex_count as u32).collect());
+
+            if indices.is_empty() {
+                continue;
+            }
+
+            let mesh = MeshBuilder::new()
+                .with_vertices(device, resources, &positions, &normals, &uvs)
+                .with_indices(device, resources, &indices)
+                .with_pipeline(pipeline_index)
+                .build();
+
+            meshes.push(mesh);
+        }
+    }
+
+    for child in node.children() {
+        visit_node(
+            child,
+            world_transform,
+            device,
+            resources,
+            meshes,
+            data_blob,
+            pipeline_index,
+            model_bounds,
+        );
     }
 }
 
 pub async fn load_gltf_model(
     device: &wgpu::Device,
-    pipeline_layout: &wgpu::PipelineLayout,
+    resources: &mut crate::renderer::GpuResources,
+    meshes: &mut Vec<crate::renderer::scene::Mesh>,
     surface_format: TextureFormat,
-) -> Result<NonInterleavedRenderInfo, ImportError> {
-    let glb_data = reqwest::get("http://localhost:8080/cube.glb")
+) -> Result<Option<ModelBounds>, ImportError> {
+    let glb_data = reqwest::get("http://localhost:8080/sponza.glb")
         .await?
         .bytes()
         .await?;
 
     let model = Gltf::from_slice(&glb_data)?;
+    let data_blob = model.blob.as_ref().ok_or(ImportError::LoadError)?;
 
-    let data_blob = model.blob.as_ref().ok_or(ImportError::LoadError)?.clone();
+    let vertex_layout = mesh_vertex_layout();
 
-    let primitives = model
-        .scenes()
-        .flat_map(|scene| scene.nodes())
-        .filter_map(|node| node.mesh())
-        .flat_map(|m| m.primitives());
+    let pipeline_index = resources.get_or_create_pipeline(
+        device,
+        "gltf_standard",
+        &vertex_layout,
+        include_str!("./gltf.wgsl"),
+        surface_format,
+    );
 
-    let mut attribute_slices = vec![
-        AttributeIndex {
-            offset: 0,
-            length: 0
-        };
-        3
-    ];
+    let mut model_bounds: Option<ModelBounds> = None;
 
-    for primitive in primitives.clone() {
-        for (semantic, accessor) in primitive.attributes() {
-            if let Some(view) = accessor.view() {
-                let slice = AttributeIndex {
-                    offset: view.offset(),
-                    length: view.length(),
-                };
-
-                match semantic {
-                    gltf::Semantic::Positions => attribute_slices[0] = slice,
-                    gltf::Semantic::Normals => attribute_slices[1] = slice,
-                    gltf::Semantic::TexCoords(0) => attribute_slices[2] = slice,
-                    _ => {}
-                }
-            }
+    for scene in model.scenes() {
+        for node in scene.nodes() {
+            visit_node(
+                node,
+                Mat4::identity(),
+                device,
+                resources,
+                meshes,
+                data_blob,
+                pipeline_index,
+                &mut model_bounds,
+            );
         }
     }
 
-    let (indices, index_format) = primitives
-        .clone()
-        .filter_map(|primitive| primitive.indices())
-        .filter_map(|indices| {
-            indices.view().map(|view| {
-                let format = match indices.data_type() {
-                    gltf::accessor::DataType::U16 => wgpu::IndexFormat::Uint16,
-                    gltf::accessor::DataType::U32 => wgpu::IndexFormat::Uint32,
-                    _ => wgpu::IndexFormat::Uint16, // Default fallback
-                };
-                (
-                    AttributeIndex {
-                        offset: view.offset(),
-                        length: view.length(),
-                    },
-                    format,
-                )
-            })
-        })
-        .last()
-        .ok_or(ImportError::LoadError)?;
-
-    info!("slices are {:?} {:?}", attribute_slices, indices);
-
-    NonInterleavedRenderInfo::new(
-        &device,
-        &pipeline_layout,
-        surface_format,
-        data_blob,
-        attribute_slices,
-        indices,
-        index_format,
-    )
+    Ok(model_bounds)
 }

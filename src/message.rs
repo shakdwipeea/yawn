@@ -29,6 +29,7 @@ pub struct ResizeMessage {
 pub struct MouseMessage {
     pub scale_factor: f64,
     pub button: f64,
+    pub buttons: u16,
     pub client_x: f64,
     pub client_y: f64,
     pub movement_x: f64,
@@ -43,6 +44,7 @@ impl MouseMessage {
         Self {
             scale_factor: window.device_pixel_ratio(),
             button: event.button() as f64,
+            buttons: event.buttons(),
             client_x: event.client_x() as f64,
             client_y: event.client_y() as f64,
             movement_x: event.movement_x() as f64,
