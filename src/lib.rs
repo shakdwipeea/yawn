@@ -3,6 +3,9 @@ use std::sync::mpsc::{self, Sender};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+use web_sys::AddEventListenerOptions;
+
 use crate::{message::WindowEvent, platform::web, platform::web::worker::MainWorker};
 
 mod camera;
@@ -20,6 +23,7 @@ pub struct App {
     resize_listener: Option<Closure<dyn FnMut()>>,
     mousemove_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
     mousedown_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
+    wheel_listener: Option<Closure<dyn FnMut(web_sys::WheelEvent)>>,
 }
 
 impl App {
@@ -41,6 +45,7 @@ impl App {
             resize_listener: None,
             mousemove_listener: None,
             mousedown_listener: None,
+            wheel_listener: None,
         };
 
         app.setup_event_listeners();
@@ -113,9 +118,37 @@ impl App {
             )
             .unwrap();
 
+        let wheel_worker_chan = self.worker_chan.clone();
+        let wheel_listener: Closure<dyn FnMut(web_sys::WheelEvent)> =
+            Closure::new(move |event: web_sys::WheelEvent| {
+                use crate::message::WheelMessage;
+
+                event.prevent_default();
+                let wheel_event_data = WheelMessage::from_evt(event);
+
+                wheel_worker_chan
+                    .send(WindowEvent::PointerWheel(wheel_event_data))
+                    .unwrap();
+            });
+
+        let wheel_options = {
+            let options = AddEventListenerOptions::new();
+            options.set_passive(false);
+            options
+        };
+
+        let _ = window
+            .add_event_listener_with_callback_and_add_event_listener_options(
+                "wheel",
+                wheel_listener.as_ref().unchecked_ref(),
+                &wheel_options,
+            )
+            .unwrap();
+
         self.resize_listener = Some(resize_listener);
         self.mousemove_listener = Some(mousemove_listener);
         self.mousedown_listener = Some(mousedown_listener);
+        self.wheel_listener = Some(wheel_listener);
     }
 }
 

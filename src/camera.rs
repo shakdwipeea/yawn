@@ -1,13 +1,14 @@
 use std::f32::consts::PI;
 
-use ultraviolet::{projection, Bivec3, Mat4, Rotor3, Vec3};
+use ultraviolet::{projection, Bivec3, Mat4, Rotor3, Vec3, Vec4};
 use wgpu::util::DeviceExt;
 
-use crate::renderer::scene::UniformResource;
+use crate::{message::WheelMessage, renderer::scene::UniformResource};
 
 const MIN_DISTANCE: f32 = 0.1;
 const MAX_PITCH: f32 = PI / 2.0 - 0.01;
-const ORBIT_SENSITIVITY: f32 = 0.0005;
+const ORBIT_SENSITIVITY: f32 = 0.005;
+const ZOOM_SENSITIVITY: f32 = 0.002;
 
 #[repr(C)]
 pub struct Camera {
@@ -138,13 +139,18 @@ impl Camera {
     }
 
     pub fn orbit(&mut self, delta_x: f32, delta_y: f32) {
+        // Skip tiny movements to reduce unnecessary computations
+        if delta_x.abs() < 0.001 && delta_y.abs() < 0.001 {
+            return;
+        }
+
         let yaw_theta = delta_x * ORBIT_SENSITIVITY;
         let yaw_rotor =
             Rotor3::from_angle_plane(yaw_theta, Bivec3::from_normalized_axis(Vec3::unit_y()));
 
         let basis = OrthonormalBasis::from_camera(self);
 
-        let desired_pitch = (self.pitch + delta_y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
+        let desired_pitch = (self.pitch - delta_y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
         let applied_pitch = desired_pitch - self.pitch;
 
         let pitch_rotor =
@@ -166,6 +172,43 @@ impl Camera {
         self.yaw += yaw_theta;
         self.pitch = desired_pitch;
 
+        self.dirty = true;
+        self.compute_view_proj_mat();
+    }
+
+    pub fn zoom(&mut self, msg: &WheelMessage) {
+        let mut delta = msg.delta_y as f32;
+
+        // Match browser delta modes so the wheel delta is always roughly pixels.
+        match msg.delta_mode {
+            1 => delta *= 16.0,
+            2 => delta *= 800.0,
+            _ => {}
+        }
+
+        // Scrolling up should zoom in.
+        delta = -delta;
+
+        if delta.abs() <= f32::EPSILON {
+            return;
+        }
+
+        // Get forward direction from camera position to target
+        let mut forward_vec = self.target - self.position;
+        if forward_vec.mag_sq() <= f32::EPSILON {
+            forward_vec = Vec3::unit_z();
+        }
+        let forward_dir = forward_vec.normalized();
+        let current_distance = forward_vec.mag();
+
+        // Scale dolly movement by distance to target for consistent perceived zoom speed
+        let dolly_distance = delta * ZOOM_SENSITIVITY * current_distance;
+        let dolly_translation = forward_dir * dolly_distance;
+
+        self.position += dolly_translation;
+        self.target += dolly_translation;
+
+        self.compute_rotor();
         self.dirty = true;
         self.compute_view_proj_mat();
     }
