@@ -455,6 +455,10 @@ impl Renderer {
                     log::error!("failed to load gltf: {e}");
                 }
             }
+            WindowEvent::PointerWheel(msg) => {
+                let mut r = renderer.borrow_mut();
+                r.scene.cam.zoom(&msg);
+            }
         }
     }
 
