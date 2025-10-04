@@ -3,11 +3,17 @@ use std::sync::mpsc::{self, Sender};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::*;
 
+#[cfg(target_arch = "wasm32")]
+use web_sys::AddEventListenerOptions;
+
 use crate::{message::WindowEvent, platform::web, platform::web::worker::MainWorker};
 
+mod camera;
+mod gltf;
 mod message;
 mod platform;
 mod renderer;
+
 #[cfg(target_arch = "wasm32")]
 pub struct App {
     _worker: platform::web::worker::MainWorker,
@@ -16,6 +22,8 @@ pub struct App {
     // Store closures to keep them alive
     resize_listener: Option<Closure<dyn FnMut()>>,
     mousemove_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
+    mousedown_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
+    wheel_listener: Option<Closure<dyn FnMut(web_sys::WheelEvent)>>,
 }
 
 impl App {
@@ -36,10 +44,12 @@ impl App {
             worker_chan: sender,
             resize_listener: None,
             mousemove_listener: None,
+            mousedown_listener: None,
+            wheel_listener: None,
         };
 
         app.setup_event_listeners();
-        return Ok(app);
+        Ok(app)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -70,6 +80,9 @@ impl App {
         let mousemove_listener: Closure<dyn FnMut(web_sys::MouseEvent)> =
             Closure::new(move |event: web_sys::MouseEvent| {
                 use crate::message::MouseMessage;
+                if event.buttons() & 0x04 != 0 {
+                    event.prevent_default();
+                }
                 let mouse_event_data = MouseMessage::from_evt(event.clone());
 
                 let mut event_data = WindowEvent::PointerMove(mouse_event_data.clone());
@@ -91,8 +104,51 @@ impl App {
             .add_event_listener_with_callback("click", mousemove_listener.as_ref().unchecked_ref())
             .unwrap();
 
+        let mousedown_listener: Closure<dyn FnMut(web_sys::MouseEvent)> =
+            Closure::new(move |event: web_sys::MouseEvent| {
+                if event.button() == 1 {
+                    event.prevent_default();
+                }
+            });
+
+        let _ = window
+            .add_event_listener_with_callback(
+                "mousedown",
+                mousedown_listener.as_ref().unchecked_ref(),
+            )
+            .unwrap();
+
+        let wheel_worker_chan = self.worker_chan.clone();
+        let wheel_listener: Closure<dyn FnMut(web_sys::WheelEvent)> =
+            Closure::new(move |event: web_sys::WheelEvent| {
+                use crate::message::WheelMessage;
+
+                event.prevent_default();
+                let wheel_event_data = WheelMessage::from_evt(event);
+
+                wheel_worker_chan
+                    .send(WindowEvent::PointerWheel(wheel_event_data))
+                    .unwrap();
+            });
+
+        let wheel_options = {
+            let options = AddEventListenerOptions::new();
+            options.set_passive(false);
+            options
+        };
+
+        let _ = window
+            .add_event_listener_with_callback_and_add_event_listener_options(
+                "wheel",
+                wheel_listener.as_ref().unchecked_ref(),
+                &wheel_options,
+            )
+            .unwrap();
+
         self.resize_listener = Some(resize_listener);
         self.mousemove_listener = Some(mousemove_listener);
+        self.mousedown_listener = Some(mousedown_listener);
+        self.wheel_listener = Some(wheel_listener);
     }
 }
 
@@ -100,7 +156,6 @@ impl App {
 #[wasm_bindgen]
 pub fn main() {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
-    console_log::init_with_level(log::Level::Info).unwrap();
     wasm_logger::init(wasm_logger::Config::default());
 
     wasm_bindgen_futures::spawn_local(async {
@@ -116,5 +171,3 @@ pub fn worker_entrypoint(ptr: u32) {
     let work = unsafe { Box::from_raw(ptr as *mut Box<dyn FnOnce()>) };
     (*work)();
 }
-
-

@@ -37,6 +37,11 @@ web-sys = { version = "0.3.77", features = [
     "Blob",
     "BlobPropertyBag",
     "Url",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
+  "Headers"
 ]}
 js-sys = "0.3.77"
 bytemuck = { version = "1.23.1", features = [
@@ -45,6 +50,9 @@ bytemuck = { version = "1.23.1", features = [
 cgmath = "0.18"
 raw-window-handle = "0.6.2"
 wgpu = "26.0.1"
+reqwest = { version = "0.12.23", features = ["json"] }
+thiserror = "2.0.15"
+ultraviolet = "0.10.0"
 
 [dependencies.gltf]
 version = "1.4"

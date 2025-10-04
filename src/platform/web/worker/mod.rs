@@ -1,10 +1,10 @@
 use crate::message::WindowEvent;
+use log::info;
 use std::sync::mpsc::Receiver;
 use std::{cell::RefCell, fmt::Debug, ops::Deref, rc::Rc};
 use wasm_bindgen::{prelude::*, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::MessageEvent;
-use log::info;
 
 /// Binds JS.
 #[wasm_bindgen(module = "/src/platform/web/worker/workerGen.js")]
@@ -46,8 +46,6 @@ impl Debug for MainWorker {
             .finish()
     }
 }
-
-
 
 impl MainWorker {
     /// Spawns main worker from the window context.
