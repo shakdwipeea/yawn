@@ -1,5 +1,5 @@
 use gltf::Gltf;
-use ultraviolet::{Mat4, Vec3, Vec4};
+use ultraviolet::{Mat4, Vec3};
 use wgpu::TextureFormat;
 
 use crate::renderer::scene::{mesh_vertex_layout, MeshBuilder};
@@ -59,15 +59,6 @@ fn convert_indices(indices: gltf::mesh::util::ReadIndices<'_>) -> Vec<u32> {
     }
 }
 
-fn mat4_from_gltf(matrix: [[f32; 4]; 4]) -> Mat4 {
-    Mat4::new(
-        Vec4::new(matrix[0][0], matrix[0][1], matrix[0][2], matrix[0][3]),
-        Vec4::new(matrix[1][0], matrix[1][1], matrix[1][2], matrix[1][3]),
-        Vec4::new(matrix[2][0], matrix[2][1], matrix[2][2], matrix[2][3]),
-        Vec4::new(matrix[3][0], matrix[3][1], matrix[3][2], matrix[3][3]),
-    )
-}
-
 fn visit_node<'a>(
     node: gltf::Node<'a>,
     parent_transform: Mat4,
@@ -78,7 +69,7 @@ fn visit_node<'a>(
     pipeline_index: usize,
     model_bounds: &mut Option<ModelBounds>,
 ) {
-    let local_transform = mat4_from_gltf(node.transform().matrix());
+    let local_transform = Mat4::from(node.transform().matrix());
     let world_transform = parent_transform * local_transform;
     let normal_matrix = world_transform.inversed().transposed();
 
@@ -89,7 +80,7 @@ fn visit_node<'a>(
                 _ => None,
             });
 
-            let mut positions: Vec<[f32; 3]> = match reader.read_positions() {
+            let positions: Vec<[f32; 3]> = match reader.read_positions() {
                 Some(iter) => iter.collect(),
                 None => Vec::new(),
             };
@@ -132,17 +123,14 @@ fn visit_node<'a>(
                 uvs.resize(vertex_count, [0.0, 0.0]);
             }
 
-            for position in &mut positions {
+            for position in &positions {
                 let vec = Vec3::new(position[0], position[1], position[2]);
                 let transformed = world_transform.transform_point3(vec);
-                *position = [transformed.x, transformed.y, transformed.z];
-            }
-
-            for position in &positions {
+                let world_point = [transformed.x, transformed.y, transformed.z];
                 if let Some(bounds) = model_bounds.as_mut() {
-                    bounds.include_point(*position);
+                    bounds.include_point(world_point);
                 } else {
-                    *model_bounds = Some(ModelBounds::new(*position, *position));
+                    *model_bounds = Some(ModelBounds::new(world_point, world_point));
                 }
             }
 
@@ -159,6 +147,7 @@ fn visit_node<'a>(
                 .with_vertices(device, resources, &positions, &normals, &uvs)
                 .with_indices(device, resources, &indices)
                 .with_pipeline(pipeline_index)
+                .with_model_matrix(device, resources, world_transform)
                 .build();
 
             meshes.push(mesh);

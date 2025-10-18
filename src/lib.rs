@@ -24,6 +24,7 @@ pub struct App {
     mousemove_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
     mousedown_listener: Option<Closure<dyn FnMut(web_sys::MouseEvent)>>,
     wheel_listener: Option<Closure<dyn FnMut(web_sys::WheelEvent)>>,
+    keyboard_listener: Option<Closure<dyn FnMut(web_sys::KeyboardEvent)>>,
 }
 
 impl App {
@@ -46,6 +47,7 @@ impl App {
             mousemove_listener: None,
             mousedown_listener: None,
             wheel_listener: None,
+            keyboard_listener: None,
         };
 
         app.setup_event_listeners();
@@ -145,10 +147,30 @@ impl App {
             )
             .unwrap();
 
+        let keyboard_worker_chan = self.worker_chan.clone();
+        let keyboard_listener: Closure<dyn FnMut(web_sys::KeyboardEvent)> =
+            Closure::new(move |event: web_sys::KeyboardEvent| {
+                use crate::message::KeyboardMessage;
+
+                let keyboard_event_data = KeyboardMessage::from_evt(event);
+
+                keyboard_worker_chan
+                    .send(WindowEvent::Keyboard(keyboard_event_data))
+                    .unwrap();
+            });
+
+        let _ = window
+            .add_event_listener_with_callback(
+                "keydown",
+                keyboard_listener.as_ref().unchecked_ref(),
+            )
+            .unwrap();
+
         self.resize_listener = Some(resize_listener);
         self.mousemove_listener = Some(mousemove_listener);
         self.mousedown_listener = Some(mousedown_listener);
         self.wheel_listener = Some(wheel_listener);
+        self.keyboard_listener = Some(keyboard_listener);
     }
 }
 

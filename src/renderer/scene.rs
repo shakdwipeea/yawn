@@ -1,8 +1,9 @@
+use ultraviolet::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::{
     camera::Camera,
-    renderer::{BufferIndex, GpuResources, Index, Normal, Position, UV},
+    renderer::{BufferIndex, GpuResources, Index, ModelMatrix, Normal, Position, UV},
 };
 
 pub struct UniformResource {
@@ -82,6 +83,7 @@ pub struct Mesh {
     pub position_buffer_index: BufferIndex<Position>,
     pub normal_buffer_index: BufferIndex<Normal>,
     pub uv_buffer_index: BufferIndex<UV>,
+    pub model_buffer_index: BufferIndex<ModelMatrix>,
     pub index_buffer_index: BufferIndex<Index>,
     pub index_format: wgpu::IndexFormat,
     pub index_count: u32,
@@ -91,7 +93,7 @@ pub struct Mesh {
 type VertexBufferSet = (BufferIndex<Position>, BufferIndex<Normal>, BufferIndex<UV>);
 type IndexBufferInfo = (BufferIndex<Index>, u32, wgpu::IndexFormat);
 
-pub fn mesh_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 3] {
+pub fn mesh_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 4] {
     [
         wgpu::VertexBufferLayout {
             array_stride: 12,
@@ -120,28 +122,56 @@ pub fn mesh_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 3] {
                 format: wgpu::VertexFormat::Float32x2,
             }],
         },
+        wgpu::VertexBufferLayout {
+            array_stride: 64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        },
     ]
 }
 
-pub struct MeshBuilder<I, V, P> {
+pub struct MeshBuilder<I, V, P, M> {
     indices: I,
     vertices: V,
     pipeline: P,
+    model_matrix: M,
     instance_count: u32,
 }
 
-impl MeshBuilder<(), (), ()> {
+impl MeshBuilder<(), (), (), ()> {
     pub fn new() -> Self {
         Self {
             indices: (),
             vertices: (),
             pipeline: (),
+            model_matrix: (),
             instance_count: 1,
         }
     }
 }
 
-impl<P> MeshBuilder<(), (), P> {
+impl<P, M> MeshBuilder<(), (), P, M> {
     pub fn with_vertices(
         self,
         device: &wgpu::Device,
@@ -149,7 +179,7 @@ impl<P> MeshBuilder<(), (), P> {
         positions: &[[f32; 3]],
         normals: &[[f32; 3]],
         uvs: &[[f32; 2]],
-    ) -> MeshBuilder<(), VertexBufferSet, P> {
+    ) -> MeshBuilder<(), VertexBufferSet, P, M> {
         let position_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Mesh Positions"),
             contents: bytemuck::cast_slice(positions),
@@ -174,18 +204,19 @@ impl<P> MeshBuilder<(), (), P> {
             vertices: (position_buffer_index, normal_buffer_index, uv_buffer_index),
             indices: self.indices,
             pipeline: self.pipeline,
+            model_matrix: self.model_matrix,
             instance_count: self.instance_count,
         }
     }
 }
 
-impl<V, P> MeshBuilder<(), V, P> {
+impl<V, P, M> MeshBuilder<(), V, P, M> {
     pub fn with_indices(
         self,
         device: &wgpu::Device,
         resources: &mut GpuResources,
         indices: &[u32],
-    ) -> MeshBuilder<IndexBufferInfo, V, P> {
+    ) -> MeshBuilder<IndexBufferInfo, V, P, M> {
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Mesh Indices"),
             contents: bytemuck::cast_slice(indices),
@@ -202,29 +233,57 @@ impl<V, P> MeshBuilder<(), V, P> {
             ),
             vertices: self.vertices,
             pipeline: self.pipeline,
+            model_matrix: self.model_matrix,
             instance_count: self.instance_count,
         }
     }
 }
 
-impl<I, V> MeshBuilder<I, V, ()> {
-    pub fn with_pipeline(self, pipeline_index: usize) -> MeshBuilder<I, V, usize> {
+impl<I, V, M> MeshBuilder<I, V, (), M> {
+    pub fn with_pipeline(self, pipeline_index: usize) -> MeshBuilder<I, V, usize, M> {
         MeshBuilder {
             pipeline: pipeline_index,
             indices: self.indices,
             vertices: self.vertices,
+            model_matrix: self.model_matrix,
             instance_count: self.instance_count,
         }
     }
 }
 
-impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize> {
+impl<I, V, P> MeshBuilder<I, V, P, ()> {
+    pub fn with_model_matrix(
+        self,
+        device: &wgpu::Device,
+        resources: &mut GpuResources,
+        matrix_columns: Mat4,
+    ) -> MeshBuilder<I, V, P, BufferIndex<ModelMatrix>> {
+        let model_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mesh Model Matrix"),
+            contents: bytemuck::cast_slice(matrix_columns.as_slice()),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let model_buffer_index = resources.add_model_matrix_buffer(model_buffer);
+
+        MeshBuilder {
+            indices: self.indices,
+            vertices: self.vertices,
+            pipeline: self.pipeline,
+            model_matrix: model_buffer_index,
+            instance_count: self.instance_count,
+        }
+    }
+}
+
+impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize, BufferIndex<ModelMatrix>> {
     pub fn build(self) -> Mesh {
         Mesh {
             pipeline_index: self.pipeline,
             position_buffer_index: (self.vertices).0,
             normal_buffer_index: (self.vertices).1,
             uv_buffer_index: (self.vertices).2,
+            model_buffer_index: self.model_matrix,
             index_buffer_index: (self.indices).0,
             index_count: (self.indices).1,
             index_format: (self.indices).2,
@@ -241,22 +300,38 @@ pub struct Vertex {
     color: [f32; 3],
 }
 
-/// Triangle vertex data.
+/// Ground plane vertex data.
 const VERTICES: &[Vertex] = &[
+    // First triangle of quad
     Vertex {
-        pos: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 1.0], // Magenta
+        pos: [-5.0, 0.0, -5.0],
+        color: [0.2, 0.8, 0.2], // Green
     },
     Vertex {
-        pos: [-0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0], // Blue
+        pos: [5.0, 0.0, -5.0],
+        color: [0.2, 0.8, 0.2], // Green
     },
     Vertex {
-        pos: [0.5, -0.5, 0.0],
-        color: [1.0, 1.0, 0.0], // Yellow
+        pos: [-5.0, 0.0, 5.0],
+        color: [0.2, 0.8, 0.2], // Green
+    },
+    // Second triangle of quad
+    Vertex {
+        pos: [5.0, 0.0, -5.0],
+        color: [0.2, 0.8, 0.2], // Green
+    },
+    Vertex {
+        pos: [5.0, 0.0, 5.0],
+        color: [0.2, 0.8, 0.2], // Green
+    },
+    Vertex {
+        pos: [-5.0, 0.0, 5.0],
+        color: [0.2, 0.8, 0.2], // Green
     },
 ];
-const INDICES: &[u32] = &[0, 1, 2];
+// Wind the ground plane so the upward-facing side is front-facing (CCW from
+// above) to avoid being culled by the default back-face culling.
+const INDICES: &[u32] = &[0, 2, 1, 3, 5, 4];
 
 pub struct Scene {
     pub uniform_buffers: [wgpu::Buffer; 2],
@@ -289,33 +364,42 @@ impl Scene {
         }
     }
 
-    pub fn create_default_triangle(
+    pub fn create_default_scene(
         &mut self,
         device: &wgpu::Device,
         resources: &mut GpuResources,
         surface_format: wgpu::TextureFormat,
     ) {
         let positions: Vec<[f32; 3]> = VERTICES.iter().map(|v| v.pos).collect();
-        // Colors ride through the "normal" slot because the render path always binds
-        // three vertex buffers (position, normal, uv) for every mesh.
-        // todo clean that shit up
-        let colors: Vec<[f32; 3]> = VERTICES.iter().map(|v| v.color).collect();
-        let uvs: &[[f32; 2]] = &[[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]];
+        // Ground plane normals point upward (Y+)
+        let normals: Vec<[f32; 3]> = vec![[0.0, 1.0, 0.0]; positions.len()];
+        let uvs: &[[f32; 2]] = &[
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+        ];
 
         let vertex_layout = mesh_vertex_layout();
 
         let pipeline_index = resources.get_or_create_pipeline(
             device,
-            "triangle_colored",
+            "ground_plane",
             &vertex_layout,
-            include_str!("../example.wgsl"),
+            include_str!("../gltf.wgsl"),
             surface_format,
         );
 
+        let scale_factor = 100.0;
+        let scale_matrix = Mat4::from_scale(scale_factor);
+
         let mesh = MeshBuilder::new()
-            .with_vertices(device, resources, &positions, &colors, uvs)
+            .with_vertices(device, resources, &positions, &normals, uvs)
             .with_indices(device, resources, INDICES)
             .with_pipeline(pipeline_index)
+            .with_model_matrix(device, resources, scale_matrix)
             .build();
 
         self.meshes.push(mesh);

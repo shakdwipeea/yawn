@@ -13,7 +13,11 @@ struct UniformData {
 struct VertexInput {
     @location(0) pos: vec3<f32>,
     @location(1) normal: vec3<f32>,
-//    @location(2) uv: vec2<f32>
+    @location(2) uv: vec2<f32>,
+    @location(3) model_col0: vec4<f32>,
+    @location(4) model_col1: vec4<f32>,
+    @location(5) model_col2: vec4<f32>,
+    @location(6) model_col3: vec4<f32>,
 }
 
 struct VertexOutput {
@@ -22,11 +26,19 @@ struct VertexOutput {
     @location(1) normal: vec3<f32>
 }
 
+
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    out.clip_position = view_proj * vec4<f32>(in.pos, 1.0);
-    out.world_pos = in.pos;
+    let model = mat4x4<f32>(
+        in.model_col0,
+        in.model_col1,
+        in.model_col2,
+        in.model_col3,
+    );
+    let world_position = model * vec4<f32>(in.pos, 1.0);
+    out.clip_position = view_proj * world_position;
+    out.world_pos = world_position.xyz;
     out.normal = normalize(in.normal);
     return out;
 }
@@ -35,7 +47,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let light_direction = normalize(vec3<f32>(0.35, 1.0, 0.45));
     let light_color = vec3<f32>(1.0, 0.95, 0.85);
-    let base_color = vec3<f32>(1.0, 0.0, 0.0);
+    let base_color = vec3<f32>(0.2, 0.2, 0.2);
 
     let normal = normalize(in.normal);
     let view_dir = normalize(uni.camera_position.xyz - in.world_pos);
@@ -44,7 +56,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let ambient = 0.15;
 
     var specular = 0.0;
-    if (diffuse_strength > 0.0) {
+    if diffuse_strength > 0.0 {
         let halfway_dir = normalize(light_direction + view_dir);
         specular = pow(max(dot(normal, halfway_dir), 0.0), 32.0);
     }

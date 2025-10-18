@@ -1,6 +1,6 @@
 use std::f32::consts::PI;
 
-use ultraviolet::{projection, Bivec3, Mat4, Rotor3, Vec3, Vec4};
+use ultraviolet::{projection, Bivec3, Mat4, Rotor3, Vec3};
 use wgpu::util::DeviceExt;
 
 use crate::{message::WheelMessage, renderer::scene::UniformResource};
@@ -26,11 +26,9 @@ pub struct Camera {
     z_near: f32,
     z_far: f32,
 
-    // Rotor orientation + spherical coordinates for orbit camera behaviour
+    // Rotor orientation for orbit camera behaviour
     rotor: Rotor3,
     distance: f32,
-    yaw: f32,
-    pitch: f32,
 
     // Dirty flag for lazy evaluation
     dirty: bool,
@@ -86,8 +84,8 @@ impl Camera {
     pub fn new(aspect_ratio: f32) -> Self {
         let mut camera = Camera {
             view_proj: [[0.0; 4]; 4],
-            position: Vec3::new(0.0, 1.5, 0.0),
-            target: Vec3::zero(),
+            position: Vec3::new(0.0, 0.5, 3.0),
+            target: Vec3::new(0.0, 0.0, 0.0),
             up: Vec3::unit_y(),
             fov: PI / 3.0,
             aspect_ratio,
@@ -95,8 +93,6 @@ impl Camera {
             z_far: 100000.0,
             rotor: Rotor3::identity(),
             distance: 1.0,
-            yaw: 0.0,
-            pitch: 0.0,
             dirty: true,
         };
 
@@ -150,11 +146,10 @@ impl Camera {
 
         let basis = OrthonormalBasis::from_camera(self);
 
-        let desired_pitch = (self.pitch - delta_y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
-        let applied_pitch = desired_pitch - self.pitch;
+        let pitch_angle = (delta_y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
 
         let pitch_rotor =
-            Rotor3::from_angle_plane(applied_pitch, Bivec3::from_normalized_axis(basis.right));
+            Rotor3::from_angle_plane(pitch_angle, Bivec3::from_normalized_axis(basis.right));
 
         let orbit_rotor = (yaw_rotor * pitch_rotor).normalized();
 
@@ -168,9 +163,6 @@ impl Camera {
         orbit_rotor.rotate_vec(&mut offset);
         self.distance = offset.mag().max(MIN_DISTANCE);
         self.position = offset + self.target;
-
-        self.yaw += yaw_theta;
-        self.pitch = desired_pitch;
 
         self.dirty = true;
         self.compute_view_proj_mat();
