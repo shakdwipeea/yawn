@@ -25,11 +25,14 @@ log = "0.4.27"
 wasm-logger = "0.2.0"
 web-sys = { version = "0.3.77", features = [
     "Window",
+    "EventTarget",
     "Document",
     "Element",
     "HtmlCanvasElement",
     "OffscreenCanvas",
     "MouseEvent",
+    "WheelEvent",
+    "AddEventListenerOptions",
     "Worker",
     "DedicatedWorkerGlobalScope",
     "Event",
@@ -53,6 +56,7 @@ wgpu = "26.0.1"
 reqwest = { version = "0.12.23", features = ["json"] }
 thiserror = "2.0.15"
 ultraviolet = "0.10.0"
+futures = "0.3"
 
 [dependencies.gltf]
 version = "1.4"
