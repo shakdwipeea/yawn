@@ -1,6 +1,8 @@
 use std::{cell::RefCell, collections::HashMap, marker::PhantomData, rc::Rc, sync::mpsc::Receiver};
 
+use futures::channel::oneshot;
 use log::info;
+use ultraviolet::Vec4;
 use wasm_bindgen::{prelude::Closure, JsCast};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::DedicatedWorkerGlobalScope;
@@ -73,6 +75,15 @@ impl GpuResources {
     }
 
     pub fn add_index_buffer(&mut self, buffer: wgpu::Buffer) -> BufferIndex<Index> {
+        let index = self.buffers.len() as u32;
+        self.buffers.push(buffer);
+        BufferIndex {
+            index,
+            _buffer_type: PhantomData,
+        }
+    }
+
+    pub fn add_model_matrix_buffer(&mut self, buffer: wgpu::Buffer) -> BufferIndex<ModelMatrix> {
         let index = self.buffers.len() as u32;
         self.buffers.push(buffer);
         BufferIndex {
@@ -234,6 +245,7 @@ pub struct Position;
 pub struct Normal;
 pub struct UV;
 pub struct Index;
+pub struct ModelMatrix;
 
 pub struct Renderer {
     canvas: web_sys::OffscreenCanvas,
@@ -266,7 +278,7 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
 
@@ -341,9 +353,9 @@ impl Renderer {
         );
 
         resources.set_bind_group_layouts(&scene.bind_group_layout);
-        scene.create_default_triangle(&device, &mut resources, surface_config.format);
+        scene.create_default_scene(&device, &mut resources, surface_config.format);
 
-        Self {
+        return Self {
             canvas,
             events_chan,
             surface,
@@ -354,7 +366,7 @@ impl Renderer {
             resources,
             depth_texture,
             depth_view,
-        }
+        };
     }
 
     fn render(&mut self, time: f32) {
@@ -420,6 +432,12 @@ impl Renderer {
                     2,
                     self.resources.get_buffer(&mesh.uv_buffer_index).slice(..),
                 );
+                render_pass.set_vertex_buffer(
+                    3,
+                    self.resources
+                        .get_buffer(&mesh.model_buffer_index)
+                        .slice(..),
+                );
 
                 render_pass.set_index_buffer(
                     self.resources
@@ -433,6 +451,97 @@ impl Renderer {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         surface_texture.present();
+    }
+
+    pub async fn read_pixel_from_texture(&self, x: u32, y: u32) -> Vec4 {
+        let width = self.depth_texture.width();
+        let height = self.depth_texture.height();
+
+        if width == 0 || height == 0 {
+            log::warn!("Depth texture has zero extent ({} x {})", width, height);
+            return Vec4::zero();
+        }
+
+        // Validate coordinates
+        if x >= width || y >= height {
+            log::warn!(
+                "Pixel coordinates ({}, {}) out of bounds for texture size {}x{}",
+                x,
+                y,
+                width,
+                height
+            );
+            return Vec4::zero();
+        }
+
+        let pixel_size = std::mem::size_of::<f32>() as u32;
+        let unpadded_row_bytes = width * pixel_size;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let padded_row_bytes = if unpadded_row_bytes % align == 0 {
+            unpadded_row_bytes
+        } else {
+            (unpadded_row_bytes / align + 1) * align
+        };
+        let buffer_size = padded_row_bytes as u64 * height as u64;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("depth pixel read buffer"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Copy just the single pixel
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("copy depth pixel to buffer"),
+            });
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.depth_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::DepthOnly,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_row_bytes),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        // Map the buffer and read the pixel
+        let slice = buffer.slice(..);
+        let (tx, rx) = oneshot::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            tx.send(result).unwrap();
+        });
+
+        // Poll the device to process the mapping
+
+        rx.await.unwrap().unwrap();
+        let depth_value = {
+            let data = slice.get_mapped_range();
+            let row_pitch = padded_row_bytes as usize;
+            let byte_offset = y as usize * row_pitch + x as usize * pixel_size as usize;
+            let mut depth_bytes = [0u8; 4];
+            depth_bytes.copy_from_slice(&data[byte_offset..byte_offset + 4]);
+            f32::from_le_bytes(depth_bytes)
+        };
+        buffer.unmap();
+
+        Vec4::new(depth_value, 0.0, 0.0, 0.0)
     }
 
     pub async fn handle_event(renderer: Rc<RefCell<Self>>, event: WindowEvent) {
@@ -451,13 +560,28 @@ impl Renderer {
                     r.scene.frame_metadata.mouse_click = [x, y];
                     log::info!("clicked");
                 }
-                if let Err(e) = Self::load_assets_async(renderer.clone()).await {
-                    log::error!("failed to load gltf: {e}");
-                }
+
+                // Read pixel from depth texture at click coordinates
+                let renderer_clone = renderer.clone();
+                let x_coord = msg.offset_x as u32;
+                let y_coord = msg.offset_y as u32;
+                let pixel_value = renderer_clone
+                    .borrow()
+                    .read_pixel_from_texture(x_coord, y_coord)
+                    .await;
+                log::info!(
+                    "Depth pixel at ({}, {}): {:?}",
+                    x_coord,
+                    y_coord,
+                    pixel_value
+                );
             }
             WindowEvent::PointerWheel(msg) => {
                 let mut r = renderer.borrow_mut();
                 r.scene.cam.zoom(&msg);
+            }
+            WindowEvent::Keyboard(msg) => {
+                log::info!("Key event received: {:?}", msg);
             }
         }
     }
@@ -465,19 +589,21 @@ impl Renderer {
     pub fn run_render_loop(renderer: Rc<RefCell<Renderer>>) {
         let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
             {
-                let event = { renderer.borrow_mut().events_chan.try_recv() };
-
-                if let Ok(event) = event {
-                    let renderer_clone = renderer.clone();
-                    spawn_local(async move {
-                        Self::handle_event(renderer_clone, event).await;
-                    });
+                if let Ok(r) = renderer.try_borrow_mut() {
+                    let event = r.events_chan.try_recv();
+                    if let Ok(event) = event {
+                        let renderer_clone = renderer.clone();
+                        spawn_local(async move {
+                            Self::handle_event(renderer_clone, event).await;
+                        });
+                    }
                 }
             }
 
             {
-                let mut r = renderer.borrow_mut();
-                r.render(time);
+                if let Ok(mut r) = renderer.try_borrow_mut() {
+                    r.render(time);
+                }
             }
 
             Self::run_render_loop(renderer.clone());

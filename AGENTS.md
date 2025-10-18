@@ -16,3 +16,4 @@
 - **WGSL shaders**: Keep binding names aligned with Rust bind group layouts
 - **JavaScript/TypeScript**: Format with prettier defaults
 - **Comments**: Add documentation comments for public APIs using `///`
+- **Logging**: Use `log::info!`, `log::error!`, etc. from the log crate, not `println!`

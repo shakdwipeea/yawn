@@ -6,6 +6,7 @@ pub enum WindowEvent {
     PointerMove(MouseMessage),
     PointerClick(MouseMessage),
     PointerWheel(WheelMessage),
+    Keyboard(KeyboardMessage),
 }
 
 // Display for WindowEvent
@@ -16,6 +17,7 @@ impl fmt::Display for WindowEvent {
             WindowEvent::PointerMove(msg) => write!(f, "PointerMove: {:?}", msg),
             WindowEvent::PointerClick(msg) => write!(f, "PointerClick: {:?}", msg),
             WindowEvent::PointerWheel(msg) => write!(f, "PointerWheel: {:?}", msg),
+            WindowEvent::Keyboard(msg) => write!(f, "Keyboard: {:?}", msg),
         }
     }
 }
@@ -79,6 +81,33 @@ impl WheelMessage {
             delta_mode: event.delta_mode(),
             client_x: event.client_x() as f64,
             client_y: event.client_y() as f64,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct KeyboardMessage {
+    pub key: String,
+    pub code: String,
+    pub alt_key: bool,
+    pub ctrl_key: bool,
+    pub meta_key: bool,
+    pub shift_key: bool,
+    pub location: u32,
+    pub repeat: bool,
+}
+
+impl KeyboardMessage {
+    pub fn from_evt(event: web_sys::KeyboardEvent) -> Self {
+        Self {
+            key: event.key(),
+            code: event.code(),
+            alt_key: event.alt_key(),
+            ctrl_key: event.ctrl_key(),
+            meta_key: event.meta_key(),
+            shift_key: event.shift_key(),
+            location: event.location(),
+            repeat: event.repeat(),
         }
     }
 }
