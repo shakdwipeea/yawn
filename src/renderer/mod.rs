@@ -4,8 +4,8 @@ use futures::channel::oneshot;
 use log::info;
 use ultraviolet::Vec4;
 use wasm_bindgen::{prelude::Closure, JsCast};
-use wasm_bindgen_futures::spawn_local;
-use web_sys::DedicatedWorkerGlobalScope;
+use wasm_bindgen_futures::{spawn_local, JsFuture};
+use web_sys::{DedicatedWorkerGlobalScope, File, MessageEvent};
 
 use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
@@ -562,19 +562,19 @@ impl Renderer {
                 }
 
                 // Read pixel from depth texture at click coordinates
-                let renderer_clone = renderer.clone();
-                let x_coord = msg.offset_x as u32;
-                let y_coord = msg.offset_y as u32;
-                let pixel_value = renderer_clone
-                    .borrow()
-                    .read_pixel_from_texture(x_coord, y_coord)
-                    .await;
-                log::info!(
-                    "Depth pixel at ({}, {}): {:?}",
-                    x_coord,
-                    y_coord,
-                    pixel_value
-                );
+                // let renderer_clone = renderer.clone();
+                // let x_coord = msg.offset_x as u32;
+                // let y_coord = msg.offset_y as u32;
+                // let pixel_value = renderer_clone
+                //     .borrow()
+                //     .read_pixel_from_texture(x_coord, y_coord)
+                //     .await;
+                // log::info!(
+                //     "Depth pixel at ({}, {}): {:?}",
+                //     x_coord,
+                //     y_coord,
+                //     pixel_value
+                // );
             }
             WindowEvent::PointerWheel(msg) => {
                 let mut r = renderer.borrow_mut();
@@ -582,6 +582,16 @@ impl Renderer {
             }
             WindowEvent::Keyboard(msg) => {
                 log::info!("Key event received: {:?}", msg);
+
+                // Check for 'L' key press
+                if msg.key == "l" || msg.key == "L" {
+                    let renderer_clone = renderer.clone();
+                    spawn_local(async move {
+                        if let Err(e) = Self::show_file_picker_and_load(renderer_clone).await {
+                            log::error!("Failed to load file: {:?}", e);
+                        }
+                    });
+                }
             }
         }
     }
@@ -712,6 +722,12 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    async fn show_file_picker_and_load(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
+        // For now, we'll just call load_assets_async which loads the default model
+        // In a full implementation, we'd modify load_gltf_model to accept the file data
+        Self::load_assets_async(renderer).await
     }
 }
 

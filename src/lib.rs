@@ -160,10 +160,7 @@ impl App {
             });
 
         let _ = window
-            .add_event_listener_with_callback(
-                "keydown",
-                keyboard_listener.as_ref().unchecked_ref(),
-            )
+            .add_event_listener_with_callback("keydown", keyboard_listener.as_ref().unchecked_ref())
             .unwrap();
 
         self.resize_listener = Some(resize_listener);

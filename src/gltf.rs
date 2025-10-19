@@ -33,6 +33,9 @@ pub enum ImportError {
 
     #[error("failed to load model")]
     LoadError,
+
+    #[error("{0}")]
+    Other(String),
 }
 
 fn convert_tex_coords(tex_coords: gltf::mesh::util::ReadTexCoords<'_>) -> Vec<[f32; 2]> {
@@ -174,7 +177,7 @@ pub async fn load_gltf_model(
     meshes: &mut Vec<crate::renderer::scene::Mesh>,
     surface_format: TextureFormat,
 ) -> Result<Option<ModelBounds>, ImportError> {
-    let glb_data = reqwest::get("http://localhost:8080/sponza.glb")
+    let glb_data = reqwest::get("http://localhost:8080/themanor.glb")
         .await?
         .bytes()
         .await?;
