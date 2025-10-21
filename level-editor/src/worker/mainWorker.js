@@ -1,7 +1,7 @@
 // Imports wasm statically.
 // Reasonable because worker can't do anything without wasm.
 // And worker's loading can still be determined from external dynamically.
-import wbg_init, { worker_entrypoint } from "pkg/wasm-index.js";
+import wbg_init, { worker_entrypoint } from "../../../../wasm-index.js";
 
 export function attachMain() {}
 

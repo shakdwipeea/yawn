@@ -11,9 +11,13 @@ use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
     message::{MouseMessage, ResizeMessage, WindowEvent},
     renderer::scene::Scene,
+    traits::SceneTrait,
 };
 
 pub mod scene;
+
+// Re-export commonly used types
+pub use scene::Mesh;
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
@@ -370,7 +374,7 @@ impl Renderer {
     }
 
     fn render(&mut self, time: f32) {
-        self.scene.update(&self.queue, time);
+        self.scene.update(&self.queue);
 
         let surface_texture = self.surface.get_current_texture().unwrap();
         let texture_view = surface_texture.texture.create_view(&Default::default());

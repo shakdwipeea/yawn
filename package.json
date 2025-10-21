@@ -4,12 +4,16 @@
   "name": "basic",
   "version": "0.1.0",
   "scripts": {
-    "wasm-dev": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --dev --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
-    "wasm-release": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --release --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
+    "wasm-dev": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --dev --out-name wasm-index --target web level-editor -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
+    "wasm-release": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --release --out-name wasm-index --target web level-editor -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
+    "wasm-renderer-dev": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --dev --out-name wasm-index --target web renderer -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
+    "wasm-renderer-release": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --release --out-name wasm-index --target web renderer -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
     "bundle-dev": "vite build --mode development",
     "bundle-release": "vite build",
     "build": "run-s clean wasm-dev bundle-dev",
     "build-release": "run-s clean wasm-release bundle-release",
+    "build-renderer": "run-s clean wasm-renderer-dev bundle-dev",
+    "build-renderer-release": "run-s clean wasm-renderer-release bundle-release",
     "start": "vite preview",
     "clean": "rimraf --glob dist **/pkg",
     "clean-all": "rimraf --glob dist **/pkg target node_modules"

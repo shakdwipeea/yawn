@@ -134,6 +134,12 @@ impl Camera {
         self.position
     }
 
+    pub fn update_aspect_ratio(&mut self, aspect_ratio: f32) {
+        self.aspect_ratio = aspect_ratio;
+        self.dirty = true;
+        self.compute_view_proj_mat();
+    }
+
     pub fn orbit(&mut self, delta_x: f32, delta_y: f32) {
         // Skip tiny movements to reduce unnecessary computations
         if delta_x.abs() < 0.001 && delta_y.abs() < 0.001 {

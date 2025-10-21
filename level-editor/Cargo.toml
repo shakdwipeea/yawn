@@ -1,0 +1,45 @@
+cargo-features = ["profile-rustflags"]
+
+[package]
+name = "level-editor"
+description = "Level editor application using the renderer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+atomics = []
+bulk-memory = []
+
+[profile.release]
+opt-level = "z"
+lto = true
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+    "-Clink-args=--shared-memory",
+    "-Clink-args=--max-memory=1073741824",
+    "-Clink-args=--import-memory",
+    "-Clink-args=--export=__wasm_init_tls",
+    "-Clink-args=--export=__tls_size",
+    "-Clink-args=--export=__tls_align",
+    "-Clink-args=--export=__tls_base",
+]
+
+[dependencies]
+renderer = { path = "../renderer" }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+console_error_panic_hook = { workspace = true }
+log = { workspace = true }
+wasm-logger = { workspace = true }
+web-sys = { workspace = true }
+js-sys = { workspace = true }
+ultraviolet = { workspace = true }
+wgpu = { workspace = true }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

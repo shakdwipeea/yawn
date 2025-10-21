@@ -1,35 +1,8 @@
-cargo-features = ["profile-rustflags"]
+[workspace]
+members = ["renderer", "level-editor"]
+resolver = "2"
 
-[package]
-name = "base"
-description = "wgpu + webpack base"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["cdylib"]
-
-[features]
-default = []
-atomics = []
-bulk-memory = []
-
-[profile.release]
-opt-level = "z"
-lto = true
-
-[target.wasm32-unknown-unknown]
-rustflags = [
-    "-Clink-args=--shared-memory",
-    "-Clink-args=--max-memory=1073741824",
-    "-Clink-args=--import-memory",
-    "-Clink-args=--export=__wasm_init_tls",
-    "-Clink-args=--export=__tls_size",
-    "-Clink-args=--export=__tls_align",
-    "-Clink-args=--export=__tls_base",
-]
-
-[dependencies]
+[workspace.dependencies]
 wasm-bindgen = { version = "0.2.100", features = ["enable-interning"] }
 wasm-bindgen-futures = "0.4.50"
 console_error_panic_hook = "0.1.7"
@@ -55,17 +28,15 @@ web-sys = { version = "0.3.77", features = [
     "Blob",
     "BlobPropertyBag",
     "Url",
-  "Request",
-  "RequestInit",
-  "RequestMode",
-  "Response",
-  "Headers",
-  "AddEventListenerOptions"
+    "Request",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Headers",
+    "AddEventListenerOptions"
 ]}
 js-sys = "0.3.77"
-bytemuck = { version = "1.23.1", features = [
-    "derive"
-]}
+bytemuck = { version = "1.23.1", features = ["derive"] }
 cgmath = "0.18"
 raw-window-handle = "0.6.2"
 wgpu = "26.0.1"
@@ -73,10 +44,4 @@ reqwest = { version = "0.12.23", features = ["json"] }
 thiserror = "2.0.15"
 ultraviolet = "0.10.0"
 futures = "0.3"
-
-[dependencies.gltf]
-version = "1.4"
-features = ["extras", "names", "KHR_lights_punctual"]
-
-[package.metadata.wasm-pack.profile.release]
-wasm-opt = false
+gltf = { version = "1.4", features = ["extras", "names", "KHR_lights_punctual"] }

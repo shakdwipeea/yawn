@@ -40,6 +40,10 @@ impl FrameMetadata {
         self.camera_position = [position.x, position.y, position.z, 1.0];
     }
 
+    pub fn update_dimension(&mut self, dimension: ultraviolet::Vec2) {
+        self.resolution = dimension.into();
+    }
+
     pub fn create_uniform_resource(self, device: &wgpu::Device) -> UniformResource {
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("frame metadata uniform buffer"),
@@ -342,6 +346,68 @@ pub struct Scene {
     pub meshes: Vec<Mesh>,
 }
 
+impl crate::traits::SceneTrait for Scene {
+    fn setup(
+        &mut self,
+        device: &wgpu::Device,
+        resources: &mut GpuResources,
+        surface_format: wgpu::TextureFormat,
+    ) {
+        self.create_default_scene(device, resources, surface_format);
+    }
+
+    fn bind_group_layouts(&self) -> &[wgpu::BindGroupLayout] {
+        &self.bind_group_layout
+    }
+
+    fn bind_groups(&self) -> &[wgpu::BindGroup] {
+        &self.bind_groups
+    }
+
+    fn uniform_buffers(&self) -> &[wgpu::Buffer] {
+        &self.uniform_buffers
+    }
+
+    fn resize(&mut self, width: f64, height: f64, scale_factor: f64, queue: &wgpu::Queue) {
+        let dimension = ultraviolet::Vec2::new(width as f32, height as f32);
+        self.frame_metadata.update_dimension(dimension);
+        self.cam.update_aspect_ratio(width as f32 / height as f32);
+        
+        queue.write_buffer(
+            &self.uniform_buffers[0],
+            0,
+            bytemuck::cast_slice(&[self.frame_metadata][..]),
+        );
+        queue.write_buffer(
+            &self.uniform_buffers[1],
+            0,
+            bytemuck::cast_slice(&[self.cam.view_proj]),
+        );
+    }
+
+    fn update(&mut self, queue: &wgpu::Queue) {
+        let time = (js_sys::Date::now() as f32) * 0.001;
+        self.frame_metadata.time = time;
+        self.frame_metadata.set_camera_position(self.cam.position());
+
+        queue.write_buffer(
+            &self.uniform_buffers[0],
+            0,
+            bytemuck::cast_slice(&[self.frame_metadata][..]),
+        );
+
+        queue.write_buffer(
+            &self.uniform_buffers[1],
+            0,
+            bytemuck::cast_slice(&[self.cam.view_proj]),
+        );
+    }
+
+    fn meshes(&self) -> &[crate::renderer::Mesh] {
+        &self.meshes
+    }
+}
+
 impl Scene {
     pub fn new(device: &wgpu::Device, dimension: ultraviolet::Vec2) -> Self {
         let cam = Camera::new(dimension.x / dimension.y);
@@ -405,20 +471,5 @@ impl Scene {
         self.meshes.push(mesh);
     }
 
-    pub fn update(&mut self, queue: &wgpu::Queue, time: f32) {
-        self.frame_metadata.time = time * 0.001;
-        self.frame_metadata.set_camera_position(self.cam.position());
 
-        queue.write_buffer(
-            &self.uniform_buffers[0],
-            0,
-            bytemuck::cast_slice(&[self.frame_metadata][..]),
-        );
-
-        queue.write_buffer(
-            &self.uniform_buffers[1],
-            0,
-            bytemuck::cast_slice(&[self.cam.view_proj]),
-        );
-    }
 }
