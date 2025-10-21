@@ -219,9 +219,9 @@ impl Camera {
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Uniform bind group layout"),
+            label: Some("Camera bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 1,
+                binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
@@ -233,10 +233,10 @@ impl Camera {
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Uniform bind group"),
+            label: Some("Camera bind group"),
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
-                binding: 1,
+                binding: 0,
                 resource: buffer.as_entire_binding(),
             }],
         });

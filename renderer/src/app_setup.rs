@@ -5,6 +5,8 @@ use wasm_bindgen::JsCast;
 
 #[cfg(target_arch = "wasm32")]
 use web_sys::AddEventListenerOptions;
+#[cfg(target_arch = "wasm32")]
+use wgpu::Error;
 
 use crate::message::WindowEvent;
 #[cfg(target_arch = "wasm32")]
@@ -158,13 +160,13 @@ pub struct WebAppRuntime {
 #[cfg(target_arch = "wasm32")]
 impl WebAppRuntime {
     /// Initialize the web worker, canvas ownership, and event listeners.
-    pub fn new(worker_name: &str, canvas_selector: &str) -> Result<Self, JsValue> {
+    pub fn new<T: crate::renderer::scene::Scene + 'static>(worker_name: &str, canvas_selector: &str) -> Result<Self, JsValue> {
         let (sender, receiver) = mpsc::channel::<WindowEvent>();
 
         let canvas = web::get_canvas_element(canvas_selector);
         let worker = MainWorker::spawn(worker_name, 1, move || {
             spawn_local(async move {
-                MainWorker::run_render_loop(receiver).await;
+                MainWorker::run_render_loop::<T>(receiver).await;
             });
         })?;
 
@@ -193,6 +195,8 @@ impl WebAppRuntime {
 /// Trait for applications that rely on the renderer's default WASM setup.
 #[cfg(target_arch = "wasm32")]
 pub trait WebApp {
+    type Scene: crate::renderer::scene::Scene + 'static;
+
     /// Name used for the spawned `MainWorker`.
     fn worker_name() -> &'static str {
         "main-worker"
@@ -208,7 +212,10 @@ pub trait WebApp {
 
     /// Perform the default WASM initialization routine.
     fn setup_runtime() -> Result<WebAppRuntime, JsValue> {
-        let mut runtime = WebAppRuntime::new(Self::worker_name(), Self::canvas_selector())?;
+        let mut runtime = WebAppRuntime::new::<Self::Scene>(
+            Self::worker_name(),
+            Self::canvas_selector(),
+        )?;
         Self::on_runtime_initialized(&mut runtime);
         Ok(runtime)
     }

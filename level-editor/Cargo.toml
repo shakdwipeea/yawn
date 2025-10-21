@@ -40,6 +40,7 @@ web-sys = { workspace = true }
 js-sys = { workspace = true }
 ultraviolet = { workspace = true }
 wgpu = { workspace = true }
+bytemuck = { workspace = true }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false

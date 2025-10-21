@@ -250,20 +250,24 @@ pub struct UV;
 pub struct Index;
 pub struct ModelMatrix;
 
-pub struct Renderer {
-    canvas: web_sys::OffscreenCanvas,
-    events_chan: Receiver<WindowEvent>,
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    surface_config: wgpu::SurfaceConfiguration,
-    scene: Scene,
-    resources: GpuResources,
-    depth_texture: wgpu::Texture,
-    depth_view: wgpu::TextureView,
+pub struct RendererContext {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub surface_config: wgpu::SurfaceConfiguration,
+    pub surface: wgpu::Surface<'static>,
+    pub depth_texture: wgpu::Texture,
+    pub depth_view: wgpu::TextureView,
 }
 
-impl Renderer {
+pub struct Renderer<T: scene::Scene> {
+    canvas: web_sys::OffscreenCanvas,
+    events_chan: Receiver<WindowEvent>,
+    context: RendererContext,
+    resources: GpuResources,
+    scene: T,
+}
+
+impl<T: Scene + 'static> Renderer<T> {
     fn create_depth_texture(
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
@@ -291,9 +295,10 @@ impl Renderer {
     }
 
     fn recreate_depth_texture(&mut self) {
-        let (texture, view) = Self::create_depth_texture(&self.device, &self.surface_config);
-        self.depth_texture = texture;
-        self.depth_view = view;
+        let (texture, view) =
+            Self::create_depth_texture(&self.context.device, &self.context.surface_config);
+        self.context.depth_texture = texture;
+        self.context.depth_view = view;
     }
 
     pub async fn new(canvas: web_sys::OffscreenCanvas, events_chan: Receiver<WindowEvent>) -> Self {
@@ -349,39 +354,37 @@ impl Renderer {
         let (depth_texture, depth_view) = Self::create_depth_texture(&device, &surface_config);
 
         let mut resources = GpuResources::new();
-
-        let mut scene = Scene::new(
-            &device,
-            ultraviolet::Vec2::new(canvas.width() as f32, canvas.height() as f32),
-        );
-
-        resources.set_bind_group_layouts(&scene.bind_group_layout);
-        scene.create_default_scene(&device, &mut resources, surface_config.format);
-
-        return Self {
-            canvas,
-            events_chan,
+        let context = RendererContext {
             surface,
             device,
             queue,
             surface_config,
-            scene,
-            resources,
             depth_texture,
             depth_view,
         };
+
+        let scene = T::setup(&context, &mut resources);
+
+        Self {
+            canvas,
+            events_chan,
+            context,
+            scene,
+            resources,
+        }
     }
 
     fn render(&mut self, time: f32) {
-        self.scene.update(&self.queue);
+        self.scene.update(&self.context, &mut self.resources);
 
-        let surface_texture = self.surface.get_current_texture().unwrap();
+        let surface_texture = self.context.surface.get_current_texture().unwrap();
         let texture_view = surface_texture.texture.create_view(&Default::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render command encoder"),
-            });
+        let mut encoder =
+            self.context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render command encoder"),
+                });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -401,7 +404,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
+                    view: &self.context.depth_view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -412,11 +415,11 @@ impl Renderer {
                 timestamp_writes: None,
             });
 
-            for (i, bind_group) in self.scene.bind_groups.iter().enumerate() {
+            for (i, bind_group) in self.scene.bind_groups().iter().enumerate() {
                 render_pass.set_bind_group(i as u32, bind_group, &[]);
             }
 
-            for mesh in &self.scene.meshes {
+            for mesh in self.scene.meshes() {
                 render_pass.set_pipeline(self.resources.get_pipeline_by_index(mesh.pipeline_index));
 
                 render_pass.set_vertex_buffer(
@@ -452,13 +455,13 @@ impl Renderer {
                 render_pass.draw_indexed(0..mesh.index_count, 0, 0..mesh.instance_count);
             }
         }
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.context.queue.submit(std::iter::once(encoder.finish()));
         surface_texture.present();
     }
 
     pub async fn read_pixel_from_texture(&self, x: u32, y: u32) -> Vec4 {
-        let width = self.depth_texture.width();
-        let height = self.depth_texture.height();
+        let width = self.context.depth_texture.width();
+        let height = self.context.depth_texture.height();
 
         if width == 0 || height == 0 {
             log::warn!("Depth texture has zero extent ({} x {})", width, height);
@@ -486,7 +489,7 @@ impl Renderer {
             (unpadded_row_bytes / align + 1) * align
         };
         let buffer_size = padded_row_bytes as u64 * height as u64;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+        let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("depth pixel read buffer"),
             size: buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
@@ -494,15 +497,16 @@ impl Renderer {
         });
 
         // Copy just the single pixel
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("copy depth pixel to buffer"),
-            });
+        let mut encoder =
+            self.context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("copy depth pixel to buffer"),
+                });
 
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &self.depth_texture,
+                texture: &self.context.depth_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
                 aspect: wgpu::TextureAspect::DepthOnly,
@@ -522,7 +526,7 @@ impl Renderer {
             },
         );
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.context.queue.submit(std::iter::once(encoder.finish()));
 
         // Map the buffer and read the pixel
         let slice = buffer.slice(..);
@@ -560,7 +564,7 @@ impl Renderer {
                     let mut r = renderer.borrow_mut();
                     let x = (msg.offset_x * msg.scale_factor) as f32;
                     let y = (msg.offset_y * msg.scale_factor) as f32;
-                    r.scene.frame_metadata.mouse_click = [x, y];
+                    r.scene.handle_mouse_click(x, y);
                     log::info!("clicked");
                 }
 
@@ -581,7 +585,7 @@ impl Renderer {
             }
             WindowEvent::PointerWheel(msg) => {
                 let mut r = renderer.borrow_mut();
-                r.scene.cam.zoom(&msg);
+                r.scene.handle_zoom(msg.delta_y as f32);
             }
             WindowEvent::Keyboard(msg) => {
                 log::info!("Key event received: {:?}", msg);
@@ -599,7 +603,7 @@ impl Renderer {
         }
     }
 
-    pub fn run_render_loop(renderer: Rc<RefCell<Renderer>>) {
+    pub fn run_render_loop(renderer: Rc<RefCell<Renderer<T>>>) {
         let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
             {
                 if let Ok(r) = renderer.try_borrow_mut() {
@@ -635,16 +639,18 @@ impl Renderer {
         let new_width = (msg.width * msg.scale_factor) as u32;
         let new_height = (msg.height * msg.scale_factor) as u32;
         if new_width != self.canvas.width() || new_height != self.canvas.height() {
-            self.surface_config.width = new_width;
-            self.surface_config.height = new_height;
-            self.surface.configure(&self.device, &self.surface_config);
+            self.context.surface_config.width = new_width;
+            self.context.surface_config.height = new_height;
+            self.context
+                .surface
+                .configure(&self.context.device, &self.context.surface_config);
             self.recreate_depth_texture();
 
             self.scene.resize(
                 new_width as f64,
                 new_height as f64,
                 msg.scale_factor,
-                &self.queue,
+                &self.context.queue,
             );
 
             info!(
@@ -655,25 +661,20 @@ impl Renderer {
     }
 
     pub fn mouse_move(&mut self, msg: MouseMessage) {
-        let x = (msg.offset_x * msg.scale_factor) as f32;
-        let y = (msg.offset_y * msg.scale_factor) as f32;
-        self.scene.frame_metadata.mouse_move = [x, y];
-
         if (msg.buttons & 0x04) != 0 {
             let delta_x = (msg.movement_x * msg.scale_factor) as f32;
             let delta_y = (msg.movement_y * msg.scale_factor) as f32;
-            self.scene.cam.orbit(delta_x, delta_y);
+            self.scene.handle_orbit(delta_x, delta_y);
         }
     }
 
     // currently this replaces everything, will need more sophisticated mechanisms later
-    pub async fn load_assets_async(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
-        let (device, surface_format, bind_group_layout) = {
+    pub async fn load_assets_async(renderer: Rc<RefCell<Renderer<T>>>) -> Result<(), ImportError> {
+        let (device, surface_format) = {
             let r = renderer.borrow();
             (
-                r.device.clone(),
-                r.surface_config.format,
-                r.scene.bind_group_layout.clone(),
+                r.context.device.clone(),
+                r.context.surface_config.format,
             )
         };
 
@@ -681,11 +682,9 @@ impl Renderer {
 
         let mut original_resources = {
             let mut r = renderer.borrow_mut();
-            r.scene.meshes.clear();
+            r.scene.clear();
             std::mem::take(&mut r.resources)
         };
-
-        original_resources.set_bind_group_layouts(&bind_group_layout);
 
         let bounds = load_gltf_model(
             &device,
@@ -698,7 +697,10 @@ impl Renderer {
         {
             let mut r = renderer.borrow_mut();
             r.resources = original_resources;
-            r.scene.meshes = meshes;
+            
+            for mesh in meshes {
+                r.scene.add_mesh(mesh);
+            }
 
             if let Some(ModelBounds { min, max }) = bounds {
                 let center = ultraviolet::Vec3::new(
@@ -724,22 +726,22 @@ impl Renderer {
                 // Using a fixed upper clamp caused large models to be clipped
                 // completely; relying on the model radius instead.
                 let far_plane = (radius * 4.0).max(near_plane + 1.0);
-                r.scene.cam.set_depth_range(near_plane, far_plane);
-                r.scene.cam.look_at(center + eye_offset, center);
+                r.scene.set_camera_depth_range(near_plane, far_plane);
+                r.scene.set_camera_look_at(center + eye_offset, center);
             }
         }
 
         Ok(())
     }
 
-    async fn show_file_picker_and_load(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
+    async fn show_file_picker_and_load(renderer: Rc<RefCell<Renderer<T>>>) -> Result<(), ImportError> {
         // For now, we'll just call load_assets_async which loads the default model
         // In a full implementation, we'd modify load_gltf_model to accept the file data
         Self::load_assets_async(renderer).await
     }
 }
 
-impl<T> From<BufferIndex<T>> for u32 {
+impl<T: scene::Scene> From<BufferIndex<T>> for u32 {
     fn from(value: BufferIndex<T>) -> Self {
         value.index
     }

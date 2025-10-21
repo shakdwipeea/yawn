@@ -3,7 +3,7 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     camera::Camera,
-    renderer::{BufferIndex, GpuResources, Index, ModelMatrix, Normal, Position, UV},
+    renderer::{self, BufferIndex, GpuResources, Index, ModelMatrix, Normal, Position, UV},
 };
 
 pub struct UniformResource {
@@ -296,257 +296,93 @@ impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize, BufferIndex<ModelMatri
     }
 }
 
-pub struct SceneBuilder<F, C> {
-    frame_metadata: F,
-    camera: C,
-    meshes: Vec<Mesh>,
-}
+pub trait Scene: Sized {
+    fn setup(renderer_context: &renderer::RendererContext, resources: &mut GpuResources) -> Self;
+    fn bind_groups(&self) -> &[wgpu::BindGroup];
+    fn meshes(&self) -> &[Mesh];
+    fn handle_mouse_click(&mut self, x: f32, y: f32);
+    fn handle_zoom(&mut self, delta_y: f32);
+    fn handle_orbit(&mut self, delta_x: f32, delta_y: f32);
+    fn clear(&mut self);
+    fn add_mesh(&mut self, mesh: Mesh);
+    fn set_camera_depth_range(&mut self, near: f32, far: f32);
+    fn set_camera_look_at(&mut self, eye: ultraviolet::Vec3, center: ultraviolet::Vec3);
 
-impl SceneBuilder<(), ()> {
-    pub fn new() -> Self {
-        Self {
-            frame_metadata: (),
-            camera: (),
-            meshes: Vec::new(),
-        }
+    fn frame_metadata_mut(&mut self) -> Option<&mut FrameMetadata> {
+        None
     }
 
-    pub fn with_dimension(
-        self,
-        dimension: ultraviolet::Vec2,
-    ) -> SceneBuilder<FrameMetadata, Camera> {
-        let SceneBuilder { meshes, .. } = self;
-
-        SceneBuilder {
-            frame_metadata: FrameMetadata::new(dimension),
-            camera: Camera::new(dimension.x / dimension.y),
-            meshes,
-        }
-    }
-}
-
-impl<C> SceneBuilder<(), C> {
-    pub fn with_frame_metadata(
-        self,
-        frame_metadata: FrameMetadata,
-    ) -> SceneBuilder<FrameMetadata, C> {
-        let SceneBuilder { camera, meshes, .. } = self;
-
-        SceneBuilder {
-            frame_metadata,
-            camera,
-            meshes,
-        }
-    }
-}
-
-impl<F> SceneBuilder<F, ()> {
-    pub fn with_camera(self, camera: Camera) -> SceneBuilder<F, Camera> {
-        let SceneBuilder {
-            frame_metadata,
-            meshes,
-            ..
-        } = self;
-
-        SceneBuilder {
-            frame_metadata,
-            camera,
-            meshes,
-        }
-    }
-}
-
-impl<F, C> SceneBuilder<F, C> {
-    pub fn with_mesh(mut self, mesh: Mesh) -> Self {
-        self.meshes.push(mesh);
-        self
+    fn camera_mut(&mut self) -> Option<&mut Camera> {
+        None
     }
 
-    pub fn with_meshes<I>(mut self, meshes: I) -> Self
-    where
-        I: IntoIterator<Item = Mesh>,
-    {
-        self.meshes.extend(meshes);
-        self
-    }
-}
-
-impl SceneBuilder<FrameMetadata, Camera> {
-    pub fn build(self, device: &wgpu::Device) -> Scene {
-        let SceneBuilder {
-            mut frame_metadata,
-            camera,
-            meshes,
-        } = self;
-
-        frame_metadata.set_camera_position(camera.position());
-
-        let uniform_resource = frame_metadata.create_uniform_resource(device);
-        let camera_resource = camera.create_uniform_resource(device);
-
-        Scene {
-            uniform_buffers: [uniform_resource.buffer, camera_resource.buffer],
-            bind_groups: [uniform_resource.bind_group, camera_resource.bind_group],
-            bind_group_layout: [
-                uniform_resource.bind_group_layout,
-                camera_resource.bind_group_layout,
-            ],
-            frame_metadata,
-            cam: camera,
-            meshes,
-        }
-    }
-}
-
-/// Simple vertex format.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pos: [f32; 3],
-    color: [f32; 3],
-}
-
-/// Ground plane vertex data.
-const VERTICES: &[Vertex] = &[
-    // First triangle of quad
-    Vertex {
-        pos: [-5.0, 0.0, -5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [5.0, 0.0, -5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [-5.0, 0.0, 5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    // Second triangle of quad
-    Vertex {
-        pos: [5.0, 0.0, -5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [5.0, 0.0, 5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [-5.0, 0.0, 5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-];
-// Wind the ground plane so the upward-facing side is front-facing (CCW from
-// above) to avoid being culled by the default back-face culling.
-const INDICES: &[u32] = &[0, 2, 1, 3, 5, 4];
-
-pub struct Scene {
-    pub uniform_buffers: [wgpu::Buffer; 2],
-    pub bind_groups: [wgpu::BindGroup; 2],
-    pub bind_group_layout: [wgpu::BindGroupLayout; 2],
-    pub frame_metadata: FrameMetadata,
-    pub cam: Camera,
-    pub meshes: Vec<Mesh>,
-}
-
-impl Scene {
-    pub fn builder() -> SceneBuilder<(), ()> {
-        SceneBuilder::new()
+    fn uniform_buffers(&self) -> Option<&[wgpu::Buffer]> {
+        None
     }
 
-    pub fn new(device: &wgpu::Device, dimension: ultraviolet::Vec2) -> Self {
-        Scene::builder().with_dimension(dimension).build(device)
-    }
-
-    pub fn setup(
-        &mut self,
-        device: &wgpu::Device,
-        resources: &mut GpuResources,
-        surface_format: wgpu::TextureFormat,
-    ) {
-        self.create_default_scene(device, resources, surface_format);
-    }
-
-    
-
-    pub fn resize(&mut self, width: f64, height: f64, _scale_factor: f64, queue: &wgpu::Queue) {
-        if height.abs() <= f64::EPSILON {
+    fn resize(&mut self, width: f64, height: f64, _scale_factor: f64, queue: &wgpu::Queue) {
+        let fm_copy = if let Some(fm) = self.frame_metadata_mut() {
+            let dimension = ultraviolet::Vec2::new(width as f32, height as f32);
+            fm.update_dimension(dimension);
+            *fm
+        } else {
             return;
+        };
+
+        let view_proj_copy = if let Some(cam) = self.camera_mut() {
+            cam.update_aspect_ratio(width as f32 / height as f32);
+            cam.view_proj
+        } else {
+            return;
+        };
+
+        if let Some(buffers) = self.uniform_buffers() {
+            if buffers.len() >= 2 {
+                queue.write_buffer(&buffers[0], 0, bytemuck::cast_slice(&[fm_copy]));
+                queue.write_buffer(&buffers[1], 0, bytemuck::cast_slice(&[view_proj_copy]));
+            }
         }
-
-        let dimension = ultraviolet::Vec2::new(width as f32, height as f32);
-        self.frame_metadata.update_dimension(dimension);
-        self.cam.update_aspect_ratio(width as f32 / height as f32);
-
-        queue.write_buffer(
-            &self.uniform_buffers[0],
-            0,
-            bytemuck::cast_slice(&[self.frame_metadata][..]),
-        );
-        queue.write_buffer(
-            &self.uniform_buffers[1],
-            0,
-            bytemuck::cast_slice(&[self.cam.view_proj]),
-        );
     }
 
-    pub fn update(&mut self, queue: &wgpu::Queue) {
-        let time = (js_sys::Date::now() as f32) * 0.001;
-        self.frame_metadata.time = time;
-        self.frame_metadata.set_camera_position(self.cam.position());
-
-        queue.write_buffer(
-            &self.uniform_buffers[0],
-            0,
-            bytemuck::cast_slice(&[self.frame_metadata][..]),
-        );
-
-        queue.write_buffer(
-            &self.uniform_buffers[1],
-            0,
-            bytemuck::cast_slice(&[self.cam.view_proj]),
-        );
-    }
-
-    
-
-    pub fn create_default_scene(
+    fn update(
         &mut self,
-        device: &wgpu::Device,
-        resources: &mut GpuResources,
-        surface_format: wgpu::TextureFormat,
+        renderer_context: &renderer::RendererContext,
+        _resources: &mut GpuResources,
     ) {
-        let positions: Vec<[f32; 3]> = VERTICES.iter().map(|v| v.pos).collect();
-        // Ground plane normals point upward (Y+)
-        let normals: Vec<[f32; 3]> = vec![[0.0, 1.0, 0.0]; positions.len()];
-        let uvs: &[[f32; 2]] = &[
-            [0.0, 0.0],
-            [1.0, 0.0],
-            [0.0, 1.0],
-            [1.0, 0.0],
-            [1.0, 1.0],
-            [0.0, 1.0],
-        ];
+        let camera_position = if let Some(cam) = self.camera_mut() {
+            cam.position()
+        } else {
+            return;
+        };
 
-        let vertex_layout = mesh_vertex_layout();
+        let fm_copy = if let Some(fm) = self.frame_metadata_mut() {
+            let time = (js_sys::Date::now() as f32) * 0.001;
+            fm.time = time;
+            fm.set_camera_position(camera_position);
+            *fm
+        } else {
+            return;
+        };
 
-        let pipeline_index = resources.get_or_create_pipeline(
-            device,
-            "ground_plane",
-            &vertex_layout,
-            include_str!("../gltf.wgsl"),
-            surface_format,
-        );
+        let view_proj_copy = if let Some(cam) = self.camera_mut() {
+            cam.view_proj
+        } else {
+            return;
+        };
 
-        let scale_factor = 100.0;
-        let scale_matrix = Mat4::from_scale(scale_factor);
-
-        let mesh = MeshBuilder::new()
-            .with_vertices(device, resources, &positions, &normals, uvs)
-            .with_indices(device, resources, INDICES)
-            .with_pipeline(pipeline_index)
-            .with_model_matrix(device, resources, scale_matrix)
-            .build();
-
-        self.meshes.push(mesh);
+        if let Some(buffers) = self.uniform_buffers() {
+            if buffers.len() >= 2 {
+                renderer_context.queue.write_buffer(
+                    &buffers[0],
+                    0,
+                    bytemuck::cast_slice(&[fm_copy]),
+                );
+                renderer_context.queue.write_buffer(
+                    &buffers[1],
+                    0,
+                    bytemuck::cast_slice(&[view_proj_copy]),
+                );
+            }
+        }
     }
 }
