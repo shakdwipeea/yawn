@@ -1,5 +1,7 @@
-// Generic worker that dynamically imports the app's WASM module
-// This allows the same worker code to be reused across all apps
+// Generic worker that imports the app's WASM module relative to the generated pkg folder.
+// Works for any application because the relative depth from this file to pkg is stable.
+import initWasm, { worker_entrypoint } from "../../../../../../wasm-index.js";
+
 export function attachMain() {}
 
 let isReady = false;
@@ -10,28 +12,21 @@ onmessage = async (event) => {
 
   isReady = true;
 
-  const wasmModule = event.data[0];  // WebAssembly.Module from wasm_bindgen::module()
-  const workerId = event.data[1];    // worker ID
-  const memory = event.data[2];      // shared memory
-  const entryPtr = event.data[3];    // worker entrypoint function pointer
+  const wasmModule = event.data[0]; // WebAssembly.Module from wasm_bindgen::module()
+  const workerId = event.data[1]; // worker ID
+  const memory = event.data[2]; // shared memory
+  const entryPtr = event.data[3]; // worker entrypoint function pointer
 
-  console.log("worker: initializing with WASM module", wasmModule);
+  console.log(
+    "worker: initializing with WASM module",
+    wasmModule,
+    "id:",
+    workerId,
+  );
 
-  // Calculate the URL to the WASM glue JS file based on this worker script's location
-  // The worker JS is in pkg/snippets/.../mainWorker.js
-  // The wasm-index.js is in pkg/wasm-index.js
-  // We need to go up from snippets to pkg
-  const workerUrl = new URL(import.meta.url);
-  const baseUrl = new URL('../../../wasm-index.js', workerUrl);
-  
-  console.log("worker: importing glue from", baseUrl.href);
+  // Initialize WASM with the shared module and memory forwarded from the main thread.
+  await initWasm({ module_or_path: wasmModule, memory });
 
-  // Dynamically import the app's WASM glue module
-  const mod = await import(baseUrl.href);
-
-  // Initialize WASM with the module and shared memory
-  await mod.default({ module: wasmModule, memory });
-
-  // Call the app-provided worker entrypoint
-  mod.worker_entrypoint(entryPtr);
+  // Call the app-provided worker entrypoint once initialization completes.
+  worker_entrypoint(entryPtr);
 };

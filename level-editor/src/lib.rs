@@ -4,12 +4,10 @@ use wasm_bindgen::prelude::*;
 use renderer::app_setup;
 use renderer::message::WindowEvent;
 use renderer::platform::web;
+use renderer::platform::web::worker::MainWorker;
 use renderer::renderer as gpu_renderer;
 use renderer::renderer::scene::Scene;
 use renderer::traits::SceneTrait;
-
-mod worker;
-use worker::MainWorker;
 
 /// Level editor specific scene that extends the base scene
 pub struct EditorScene {
@@ -29,7 +27,7 @@ impl SceneTrait for EditorScene {
     ) {
         // Call base scene setup
         self.base.setup(device, resources, surface_format);
-        
+
         // Add level-editor specific setup here
         // For example, load additional tools, UI elements, etc.
     }
@@ -117,8 +115,4 @@ pub fn main() {
     });
 }
 
-// Executes the closure it is spawned with
-#[wasm_bindgen]
-pub fn worker_entrypoint(ptr: u32) {
-    renderer::worker_entrypoint_impl(ptr);
-}
+renderer::export_worker_entrypoint!();
