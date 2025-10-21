@@ -4,8 +4,8 @@
   "name": "basic",
   "version": "0.1.0",
   "scripts": {
-    "wasm-dev": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --dev --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
-    "wasm-release": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' wasm-pack build --release --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
+    "wasm-dev": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --dev --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
+    "wasm-release": "RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals -Clink-args=--shared-memory -Clink-args=--max-memory=1073741824 -Clink-args=--import-memory -Clink-args=--export=__wasm_init_tls -Clink-args=--export=__tls_size -Clink-args=--export=__tls_align -Clink-args=--export=__tls_base' wasm-pack build --release --out-name wasm-index --target web . -- --features atomics,bulk-memory -Z build-std=panic_abort,std",
     "bundle-dev": "vite build --mode development",
     "bundle-release": "vite build",
     "build": "run-s clean wasm-dev bundle-dev",
@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@wasm-tool/wasm-pack-plugin": "^1.7.0",
-    "vite": "^5.1.6",
+    "vite": "^7.1.10",
     "vite-plugin-wasm": "^3.3.0",
     "rollup-plugin-copy": "^3.5.0",
     "rimraf": "^5.0.1",
