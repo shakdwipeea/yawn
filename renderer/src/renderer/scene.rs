@@ -163,8 +163,8 @@ pub struct MeshBuilder<I, V, P, M> {
     instance_count: u32,
 }
 
-impl MeshBuilder<(), (), (), ()> {
-    pub fn new() -> Self {
+impl Default for MeshBuilder<(), (), (), ()> {
+    fn default() -> Self {
         Self {
             indices: (),
             vertices: (),

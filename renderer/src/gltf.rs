@@ -146,7 +146,7 @@ fn visit_node<'a>(
                 continue;
             }
 
-            let mesh = MeshBuilder::new()
+            let mesh = MeshBuilder::default()
                 .with_vertices(device, resources, &positions, &normals, &uvs)
                 .with_indices(device, resources, &indices)
                 .with_pipeline(pipeline_index)

@@ -194,7 +194,7 @@ impl EditorScene {
         let scale_factor = 100.0;
         let scale_matrix = Mat4::from_scale(scale_factor);
 
-        let mesh = MeshBuilder::new()
+        let mesh = MeshBuilder::default()
             .with_vertices(device, resources, &positions, &normals, uvs)
             .with_indices(device, resources, Self::INDICES)
             .with_pipeline(pipeline_index)
