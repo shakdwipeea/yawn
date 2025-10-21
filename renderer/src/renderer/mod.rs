@@ -11,7 +11,6 @@ use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
     message::{MouseMessage, ResizeMessage, WindowEvent},
     renderer::scene::Scene,
-    traits::SceneTrait,
 };
 
 pub mod scene;
@@ -641,7 +640,12 @@ impl Renderer {
             self.surface.configure(&self.device, &self.surface_config);
             self.recreate_depth_texture();
 
-            self.scene.frame_metadata.resolution = [new_width as f32, new_height as f32];
+            self.scene.resize(
+                new_width as f64,
+                new_height as f64,
+                msg.scale_factor,
+                &self.queue,
+            );
 
             info!(
                 "Resized: ({}, {}), scale: {}",

@@ -3,56 +3,14 @@ use wasm_bindgen::prelude::*;
 use renderer::app_setup::WebApp;
 use renderer::renderer as gpu_renderer;
 use renderer::renderer::scene::Scene;
-use renderer::traits::SceneTrait;
 
 /// Level editor specific scene that extends the base scene
 pub struct EditorScene {
-    base: Scene,
+    pub base: Scene,
     // Add level-editor specific fields here
     // For example:
     // pub selected_object: Option<usize>,
     // pub grid_enabled: bool,
-}
-
-impl SceneTrait for EditorScene {
-    fn setup(
-        &mut self,
-        device: &wgpu::Device,
-        resources: &mut gpu_renderer::GpuResources,
-        surface_format: wgpu::TextureFormat,
-    ) {
-        // Call base scene setup
-        self.base.setup(device, resources, surface_format);
-
-        // Add level-editor specific setup here
-        // For example, load additional tools, UI elements, etc.
-    }
-
-    fn bind_group_layouts(&self) -> &[wgpu::BindGroupLayout] {
-        self.base.bind_group_layouts()
-    }
-
-    fn bind_groups(&self) -> &[wgpu::BindGroup] {
-        self.base.bind_groups()
-    }
-
-    fn uniform_buffers(&self) -> &[wgpu::Buffer] {
-        self.base.uniform_buffers()
-    }
-
-    fn resize(&mut self, width: f64, height: f64, scale_factor: f64, queue: &wgpu::Queue) {
-        self.base.resize(width, height, scale_factor, queue);
-        // Add level-editor specific resize logic here
-    }
-
-    fn update(&mut self, queue: &wgpu::Queue) {
-        self.base.update(queue);
-        // Add level-editor specific update logic here
-    }
-
-    fn meshes(&self) -> &[gpu_renderer::Mesh] {
-        self.base.meshes()
-    }
 }
 
 impl EditorScene {
@@ -61,6 +19,26 @@ impl EditorScene {
             base: Scene::new(device, dimension),
             // Initialize level-editor specific fields here
         }
+    }
+
+    pub fn setup(
+        &mut self,
+        device: &wgpu::Device,
+        resources: &mut gpu_renderer::GpuResources,
+        surface_format: wgpu::TextureFormat,
+    ) {
+        self.base.setup(device, resources, surface_format);
+        // Add level-editor specific setup here (e.g. tool overlays, UI data, etc.)
+    }
+
+    pub fn resize(&mut self, width: f64, height: f64, scale_factor: f64, queue: &wgpu::Queue) {
+        self.base.resize(width, height, scale_factor, queue);
+        // Add level-editor specific resize logic here if needed.
+    }
+
+    pub fn update(&mut self, queue: &wgpu::Queue) {
+        self.base.update(queue);
+        // Add level-editor specific update logic here if needed.
     }
 }
 
@@ -71,9 +49,7 @@ pub struct LevelEditor {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl WebApp for LevelEditor {
-    type Scene = EditorScene;
-}
+impl WebApp for LevelEditor {}
 
 /// Entrypoint for the level editor
 #[wasm_bindgen]

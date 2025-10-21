@@ -10,7 +10,6 @@ pub mod gltf;
 pub mod message;
 pub mod platform;
 pub mod renderer;
-pub mod traits;
 
 /// Worker entrypoint helper - executes the closure it is spawned with
 /// Applications should export this with #[wasm_bindgen]
@@ -20,7 +19,7 @@ pub fn worker_entrypoint_impl(ptr: u32) {
 }
 
 /// Macro to export the worker_entrypoint function in application crates
-/// 
+///
 /// Usage:
 /// ```rust
 /// use renderer::export_worker_entrypoint;

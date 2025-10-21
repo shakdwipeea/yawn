@@ -296,6 +296,108 @@ impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize, BufferIndex<ModelMatri
     }
 }
 
+pub struct SceneBuilder<F, C> {
+    frame_metadata: F,
+    camera: C,
+    meshes: Vec<Mesh>,
+}
+
+impl SceneBuilder<(), ()> {
+    pub fn new() -> Self {
+        Self {
+            frame_metadata: (),
+            camera: (),
+            meshes: Vec::new(),
+        }
+    }
+
+    pub fn with_dimension(
+        self,
+        dimension: ultraviolet::Vec2,
+    ) -> SceneBuilder<FrameMetadata, Camera> {
+        let SceneBuilder { meshes, .. } = self;
+
+        SceneBuilder {
+            frame_metadata: FrameMetadata::new(dimension),
+            camera: Camera::new(dimension.x / dimension.y),
+            meshes,
+        }
+    }
+}
+
+impl<C> SceneBuilder<(), C> {
+    pub fn with_frame_metadata(
+        self,
+        frame_metadata: FrameMetadata,
+    ) -> SceneBuilder<FrameMetadata, C> {
+        let SceneBuilder { camera, meshes, .. } = self;
+
+        SceneBuilder {
+            frame_metadata,
+            camera,
+            meshes,
+        }
+    }
+}
+
+impl<F> SceneBuilder<F, ()> {
+    pub fn with_camera(self, camera: Camera) -> SceneBuilder<F, Camera> {
+        let SceneBuilder {
+            frame_metadata,
+            meshes,
+            ..
+        } = self;
+
+        SceneBuilder {
+            frame_metadata,
+            camera,
+            meshes,
+        }
+    }
+}
+
+impl<F, C> SceneBuilder<F, C> {
+    pub fn with_mesh(mut self, mesh: Mesh) -> Self {
+        self.meshes.push(mesh);
+        self
+    }
+
+    pub fn with_meshes<I>(mut self, meshes: I) -> Self
+    where
+        I: IntoIterator<Item = Mesh>,
+    {
+        self.meshes.extend(meshes);
+        self
+    }
+}
+
+impl SceneBuilder<FrameMetadata, Camera> {
+    pub fn build(self, device: &wgpu::Device) -> Scene {
+        let SceneBuilder {
+            mut frame_metadata,
+            camera,
+            meshes,
+        } = self;
+
+        frame_metadata.set_camera_position(camera.position());
+
+        let uniform_resource = frame_metadata.create_uniform_resource(device);
+        let camera_resource = camera.create_uniform_resource(device);
+
+        Scene {
+            uniform_buffers: [uniform_resource.buffer, camera_resource.buffer],
+            bind_groups: [uniform_resource.bind_group, camera_resource.bind_group],
+            bind_group_layout: [
+                uniform_resource.bind_group_layout,
+                camera_resource.bind_group_layout,
+            ],
+            frame_metadata,
+            cam: camera,
+            meshes,
+        }
+    }
+}
+
 /// Simple vertex format.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -346,8 +448,16 @@ pub struct Scene {
     pub meshes: Vec<Mesh>,
 }
 
-impl crate::traits::SceneTrait for Scene {
-    fn setup(
+impl Scene {
+    pub fn builder() -> SceneBuilder<(), ()> {
+        SceneBuilder::new()
+    }
+
+    pub fn new(device: &wgpu::Device, dimension: ultraviolet::Vec2) -> Self {
+        Scene::builder().with_dimension(dimension).build(device)
+    }
+
+    pub fn setup(
         &mut self,
         device: &wgpu::Device,
         resources: &mut GpuResources,
@@ -356,23 +466,17 @@ impl crate::traits::SceneTrait for Scene {
         self.create_default_scene(device, resources, surface_format);
     }
 
-    fn bind_group_layouts(&self) -> &[wgpu::BindGroupLayout] {
-        &self.bind_group_layout
-    }
+    
 
-    fn bind_groups(&self) -> &[wgpu::BindGroup] {
-        &self.bind_groups
-    }
+    pub fn resize(&mut self, width: f64, height: f64, _scale_factor: f64, queue: &wgpu::Queue) {
+        if height.abs() <= f64::EPSILON {
+            return;
+        }
 
-    fn uniform_buffers(&self) -> &[wgpu::Buffer] {
-        &self.uniform_buffers
-    }
-
-    fn resize(&mut self, width: f64, height: f64, scale_factor: f64, queue: &wgpu::Queue) {
         let dimension = ultraviolet::Vec2::new(width as f32, height as f32);
         self.frame_metadata.update_dimension(dimension);
         self.cam.update_aspect_ratio(width as f32 / height as f32);
-        
+
         queue.write_buffer(
             &self.uniform_buffers[0],
             0,
@@ -385,7 +489,7 @@ impl crate::traits::SceneTrait for Scene {
         );
     }
 
-    fn update(&mut self, queue: &wgpu::Queue) {
+    pub fn update(&mut self, queue: &wgpu::Queue) {
         let time = (js_sys::Date::now() as f32) * 0.001;
         self.frame_metadata.time = time;
         self.frame_metadata.set_camera_position(self.cam.position());
@@ -403,32 +507,7 @@ impl crate::traits::SceneTrait for Scene {
         );
     }
 
-    fn meshes(&self) -> &[crate::renderer::Mesh] {
-        &self.meshes
-    }
-}
-
-impl Scene {
-    pub fn new(device: &wgpu::Device, dimension: ultraviolet::Vec2) -> Self {
-        let cam = Camera::new(dimension.x / dimension.y);
-        let mut frame_metadata = FrameMetadata::new(dimension);
-        frame_metadata.set_camera_position(cam.position());
-
-        let uniform_resource = frame_metadata.create_uniform_resource(device);
-        let camera_resource = cam.create_uniform_resource(device);
-
-        Scene {
-            uniform_buffers: [uniform_resource.buffer, camera_resource.buffer],
-            bind_groups: [uniform_resource.bind_group, camera_resource.bind_group],
-            bind_group_layout: [
-                uniform_resource.bind_group_layout,
-                camera_resource.bind_group_layout,
-            ],
-            frame_metadata,
-            cam,
-            meshes: Vec::new(),
-        }
-    }
+    
 
     pub fn create_default_scene(
         &mut self,
@@ -470,6 +549,4 @@ impl Scene {
 
         self.meshes.push(mesh);
     }
-
-
 }

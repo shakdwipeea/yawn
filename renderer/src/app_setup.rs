@@ -6,11 +6,11 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use web_sys::AddEventListenerOptions;
 
+use crate::message::WindowEvent;
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web;
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web::worker::MainWorker;
-use crate::{message::WindowEvent, traits::SceneTrait};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 
@@ -193,9 +193,6 @@ impl WebAppRuntime {
 /// Trait for applications that rely on the renderer's default WASM setup.
 #[cfg(target_arch = "wasm32")]
 pub trait WebApp {
-    /// Scene type rendered by the application.
-    type Scene: SceneTrait;
-
     /// Name used for the spawned `MainWorker`.
     fn worker_name() -> &'static str {
         "main-worker"
