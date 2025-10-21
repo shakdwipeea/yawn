@@ -1,10 +1,6 @@
-use std::sync::mpsc::{self, Sender};
 use wasm_bindgen::prelude::*;
 
-use renderer::app_setup;
-use renderer::message::WindowEvent;
-use renderer::platform::web;
-use renderer::platform::web::worker::MainWorker;
+use renderer::app_setup::WebApp;
 use renderer::renderer as gpu_renderer;
 use renderer::renderer::scene::Scene;
 use renderer::traits::SceneTrait;
@@ -68,38 +64,15 @@ impl EditorScene {
     }
 }
 
-/// Level editor app
 #[cfg(target_arch = "wasm32")]
-pub struct EditorApp {
-    _worker: MainWorker,
-    worker_chan: Sender<WindowEvent>,
-    _event_listeners: app_setup::EventListeners,
+pub struct LevelEditor {
+    #[allow(dead_code)]
+    scene: EditorScene,
 }
 
-impl EditorApp {
-    pub async fn new() -> Result<Self, JsValue> {
-        let (sender, receiver) = mpsc::channel::<WindowEvent>();
-
-        let canvas = web::get_canvas_element("#canvas0");
-        let _worker = MainWorker::spawn("main-worker", 1, move || {
-            wasm_bindgen_futures::spawn_local(async move {
-                // Use the custom render loop with EditorScene
-                MainWorker::run_render_loop(receiver).await;
-            });
-        })?;
-
-        _worker.transfer_ownership(&canvas);
-
-        let event_listeners = app_setup::setup_event_listeners(&sender)?;
-
-        let app = EditorApp {
-            _worker,
-            worker_chan: sender,
-            _event_listeners: event_listeners,
-        };
-
-        Ok(app)
-    }
+#[cfg(target_arch = "wasm32")]
+impl WebApp for LevelEditor {
+    type Scene = EditorScene;
 }
 
 /// Entrypoint for the level editor
@@ -109,9 +82,9 @@ pub fn main() {
     wasm_logger::init(wasm_logger::Config::default());
 
     wasm_bindgen_futures::spawn_local(async {
-        let app = EditorApp::new().await.unwrap();
-        // Keep the app running and prevent drops
-        Box::leak(Box::new(app));
+        let runtime = LevelEditor::setup_runtime().unwrap();
+        // Keep the runtime running and prevent drops
+        Box::leak(Box::new(runtime));
     });
 }
 
