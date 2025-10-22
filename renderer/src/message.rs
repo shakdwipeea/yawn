@@ -1,4 +1,6 @@
 use core::fmt;
+use std::sync::mpsc::TryRecvError;
+use std::cell::BorrowMutError;
 
 #[derive(Debug)]
 pub enum WindowEvent {
@@ -109,5 +111,39 @@ impl KeyboardMessage {
             location: event.location(),
             repeat: event.repeat(),
         }
+    }
+}
+
+#[derive(Debug)]
+pub enum DrainEventError {
+    BorrowError(BorrowMutError),
+    ChannelDisconnected,
+    ChannelEmpty,
+}
+
+impl fmt::Display for DrainEventError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DrainEventError::BorrowError(err) => write!(f, "Failed to borrow renderer: {}", err),
+            DrainEventError::ChannelDisconnected => write!(f, "Event channel disconnected"),
+            DrainEventError::ChannelEmpty => write!(f, "Event channel empty"),
+        }
+    }
+}
+
+impl std::error::Error for DrainEventError {}
+
+impl From<TryRecvError> for DrainEventError {
+    fn from(err: TryRecvError) -> Self {
+        match err {
+            TryRecvError::Empty => DrainEventError::ChannelEmpty,
+            TryRecvError::Disconnected => DrainEventError::ChannelDisconnected,
+        }
+    }
+}
+
+impl From<BorrowMutError> for DrainEventError {
+    fn from(err: BorrowMutError) -> Self {
+        DrainEventError::BorrowError(err)
     }
 }
