@@ -1,8 +1,9 @@
+use ultraviolet::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::{
     camera::Camera,
-    renderer::{BufferIndex, GpuResources, Index, Normal, Position, UV},
+    renderer::{self, BufferIndex, GpuResources, Index, ModelMatrix, Normal, Position, UV},
 };
 
 pub struct UniformResource {
@@ -37,6 +38,10 @@ impl FrameMetadata {
 
     pub fn set_camera_position(&mut self, position: ultraviolet::Vec3) {
         self.camera_position = [position.x, position.y, position.z, 1.0];
+    }
+
+    pub fn update_dimension(&mut self, dimension: ultraviolet::Vec2) {
+        self.resolution = dimension.into();
     }
 
     pub fn create_uniform_resource(self, device: &wgpu::Device) -> UniformResource {
@@ -82,6 +87,7 @@ pub struct Mesh {
     pub position_buffer_index: BufferIndex<Position>,
     pub normal_buffer_index: BufferIndex<Normal>,
     pub uv_buffer_index: BufferIndex<UV>,
+    pub model_buffer_index: BufferIndex<ModelMatrix>,
     pub index_buffer_index: BufferIndex<Index>,
     pub index_format: wgpu::IndexFormat,
     pub index_count: u32,
@@ -91,7 +97,7 @@ pub struct Mesh {
 type VertexBufferSet = (BufferIndex<Position>, BufferIndex<Normal>, BufferIndex<UV>);
 type IndexBufferInfo = (BufferIndex<Index>, u32, wgpu::IndexFormat);
 
-pub fn mesh_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 3] {
+pub fn mesh_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 4] {
     [
         wgpu::VertexBufferLayout {
             array_stride: 12,
@@ -120,28 +126,56 @@ pub fn mesh_vertex_layout() -> [wgpu::VertexBufferLayout<'static>; 3] {
                 format: wgpu::VertexFormat::Float32x2,
             }],
         },
+        wgpu::VertexBufferLayout {
+            array_stride: 64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 16,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 6,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+            ],
+        },
     ]
 }
 
-pub struct MeshBuilder<I, V, P> {
+pub struct MeshBuilder<I, V, P, M> {
     indices: I,
     vertices: V,
     pipeline: P,
+    model_matrix: M,
     instance_count: u32,
 }
 
-impl MeshBuilder<(), (), ()> {
-    pub fn new() -> Self {
+impl Default for MeshBuilder<(), (), (), ()> {
+    fn default() -> Self {
         Self {
             indices: (),
             vertices: (),
             pipeline: (),
+            model_matrix: (),
             instance_count: 1,
         }
     }
 }
 
-impl<P> MeshBuilder<(), (), P> {
+impl<P, M> MeshBuilder<(), (), P, M> {
     pub fn with_vertices(
         self,
         device: &wgpu::Device,
@@ -149,7 +183,7 @@ impl<P> MeshBuilder<(), (), P> {
         positions: &[[f32; 3]],
         normals: &[[f32; 3]],
         uvs: &[[f32; 2]],
-    ) -> MeshBuilder<(), VertexBufferSet, P> {
+    ) -> MeshBuilder<(), VertexBufferSet, P, M> {
         let position_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Mesh Positions"),
             contents: bytemuck::cast_slice(positions),
@@ -174,18 +208,19 @@ impl<P> MeshBuilder<(), (), P> {
             vertices: (position_buffer_index, normal_buffer_index, uv_buffer_index),
             indices: self.indices,
             pipeline: self.pipeline,
+            model_matrix: self.model_matrix,
             instance_count: self.instance_count,
         }
     }
 }
 
-impl<V, P> MeshBuilder<(), V, P> {
+impl<V, P, M> MeshBuilder<(), V, P, M> {
     pub fn with_indices(
         self,
         device: &wgpu::Device,
         resources: &mut GpuResources,
         indices: &[u32],
-    ) -> MeshBuilder<IndexBufferInfo, V, P> {
+    ) -> MeshBuilder<IndexBufferInfo, V, P, M> {
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Mesh Indices"),
             contents: bytemuck::cast_slice(indices),
@@ -202,29 +237,57 @@ impl<V, P> MeshBuilder<(), V, P> {
             ),
             vertices: self.vertices,
             pipeline: self.pipeline,
+            model_matrix: self.model_matrix,
             instance_count: self.instance_count,
         }
     }
 }
 
-impl<I, V> MeshBuilder<I, V, ()> {
-    pub fn with_pipeline(self, pipeline_index: usize) -> MeshBuilder<I, V, usize> {
+impl<I, V, M> MeshBuilder<I, V, (), M> {
+    pub fn with_pipeline(self, pipeline_index: usize) -> MeshBuilder<I, V, usize, M> {
         MeshBuilder {
             pipeline: pipeline_index,
             indices: self.indices,
             vertices: self.vertices,
+            model_matrix: self.model_matrix,
             instance_count: self.instance_count,
         }
     }
 }
 
-impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize> {
+impl<I, V, P> MeshBuilder<I, V, P, ()> {
+    pub fn with_model_matrix(
+        self,
+        device: &wgpu::Device,
+        resources: &mut GpuResources,
+        matrix_columns: Mat4,
+    ) -> MeshBuilder<I, V, P, BufferIndex<ModelMatrix>> {
+        let model_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mesh Model Matrix"),
+            contents: bytemuck::cast_slice(matrix_columns.as_slice()),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        let model_buffer_index = resources.add_model_matrix_buffer(model_buffer);
+
+        MeshBuilder {
+            indices: self.indices,
+            vertices: self.vertices,
+            pipeline: self.pipeline,
+            model_matrix: model_buffer_index,
+            instance_count: self.instance_count,
+        }
+    }
+}
+
+impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize, BufferIndex<ModelMatrix>> {
     pub fn build(self) -> Mesh {
         Mesh {
             pipeline_index: self.pipeline,
             position_buffer_index: (self.vertices).0,
             normal_buffer_index: (self.vertices).1,
             uv_buffer_index: (self.vertices).2,
+            model_buffer_index: self.model_matrix,
             index_buffer_index: (self.indices).0,
             index_count: (self.indices).1,
             index_format: (self.indices).2,
@@ -233,108 +296,93 @@ impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize> {
     }
 }
 
-/// Simple vertex format.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct Vertex {
-    pos: [f32; 3],
-    color: [f32; 3],
-}
+pub trait Scene: Sized {
+    fn setup(renderer_context: &renderer::RendererContext, resources: &mut GpuResources) -> Self;
+    fn bind_groups(&self) -> &[wgpu::BindGroup];
+    fn meshes(&self) -> &[Mesh];
+    fn handle_mouse_click(&mut self, x: f32, y: f32);
+    fn handle_zoom(&mut self, delta_y: f32);
+    fn handle_orbit(&mut self, delta_x: f32, delta_y: f32);
+    fn clear(&mut self);
+    fn add_mesh(&mut self, mesh: Mesh);
+    fn set_camera_depth_range(&mut self, near: f32, far: f32);
+    fn set_camera_look_at(&mut self, eye: ultraviolet::Vec3, center: ultraviolet::Vec3);
 
-/// Triangle vertex data.
-const VERTICES: &[Vertex] = &[
-    Vertex {
-        pos: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 1.0], // Magenta
-    },
-    Vertex {
-        pos: [-0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0], // Blue
-    },
-    Vertex {
-        pos: [0.5, -0.5, 0.0],
-        color: [1.0, 1.0, 0.0], // Yellow
-    },
-];
-const INDICES: &[u32] = &[0, 1, 2];
+    fn frame_metadata_mut(&mut self) -> Option<&mut FrameMetadata> {
+        None
+    }
 
-pub struct Scene {
-    pub uniform_buffers: [wgpu::Buffer; 2],
-    pub bind_groups: [wgpu::BindGroup; 2],
-    pub bind_group_layout: [wgpu::BindGroupLayout; 2],
-    pub frame_metadata: FrameMetadata,
-    pub cam: Camera,
-    pub meshes: Vec<Mesh>,
-}
+    fn camera_mut(&mut self) -> Option<&mut Camera> {
+        None
+    }
 
-impl Scene {
-    pub fn new(device: &wgpu::Device, dimension: ultraviolet::Vec2) -> Self {
-        let cam = Camera::new(dimension.x / dimension.y);
-        let mut frame_metadata = FrameMetadata::new(dimension);
-        frame_metadata.set_camera_position(cam.position());
+    fn uniform_buffers(&self) -> Option<&[wgpu::Buffer]> {
+        None
+    }
 
-        let uniform_resource = frame_metadata.create_uniform_resource(device);
-        let camera_resource = cam.create_uniform_resource(device);
+    fn resize(&mut self, width: f64, height: f64, _scale_factor: f64, queue: &wgpu::Queue) {
+        let fm_copy = if let Some(fm) = self.frame_metadata_mut() {
+            let dimension = ultraviolet::Vec2::new(width as f32, height as f32);
+            fm.update_dimension(dimension);
+            *fm
+        } else {
+            return;
+        };
 
-        Scene {
-            uniform_buffers: [uniform_resource.buffer, camera_resource.buffer],
-            bind_groups: [uniform_resource.bind_group, camera_resource.bind_group],
-            bind_group_layout: [
-                uniform_resource.bind_group_layout,
-                camera_resource.bind_group_layout,
-            ],
-            frame_metadata,
-            cam,
-            meshes: Vec::new(),
+        let view_proj_copy = if let Some(cam) = self.camera_mut() {
+            cam.update_aspect_ratio(width as f32 / height as f32);
+            cam.view_proj
+        } else {
+            return;
+        };
+
+        if let Some(buffers) = self.uniform_buffers() {
+            if buffers.len() >= 2 {
+                queue.write_buffer(&buffers[0], 0, bytemuck::cast_slice(&[fm_copy]));
+                queue.write_buffer(&buffers[1], 0, bytemuck::cast_slice(&[view_proj_copy]));
+            }
         }
     }
 
-    pub fn create_default_triangle(
+    fn update(
         &mut self,
-        device: &wgpu::Device,
-        resources: &mut GpuResources,
-        surface_format: wgpu::TextureFormat,
+        renderer_context: &renderer::RendererContext,
+        _resources: &mut GpuResources,
     ) {
-        let positions: Vec<[f32; 3]> = VERTICES.iter().map(|v| v.pos).collect();
-        // Colors ride through the "normal" slot because the render path always binds
-        // three vertex buffers (position, normal, uv) for every mesh.
-        // todo clean that shit up
-        let colors: Vec<[f32; 3]> = VERTICES.iter().map(|v| v.color).collect();
-        let uvs: &[[f32; 2]] = &[[0.0, 0.0], [0.0, 1.0], [1.0, 0.0]];
+        let camera_position = if let Some(cam) = self.camera_mut() {
+            cam.position()
+        } else {
+            return;
+        };
 
-        let vertex_layout = mesh_vertex_layout();
+        let fm_copy = if let Some(fm) = self.frame_metadata_mut() {
+            let time = (js_sys::Date::now() as f32) * 0.001;
+            fm.time = time;
+            fm.set_camera_position(camera_position);
+            *fm
+        } else {
+            return;
+        };
 
-        let pipeline_index = resources.get_or_create_pipeline(
-            device,
-            "triangle_colored",
-            &vertex_layout,
-            include_str!("../example.wgsl"),
-            surface_format,
-        );
+        let view_proj_copy = if let Some(cam) = self.camera_mut() {
+            cam.view_proj
+        } else {
+            return;
+        };
 
-        let mesh = MeshBuilder::new()
-            .with_vertices(device, resources, &positions, &colors, uvs)
-            .with_indices(device, resources, INDICES)
-            .with_pipeline(pipeline_index)
-            .build();
-
-        self.meshes.push(mesh);
-    }
-
-    pub fn update(&mut self, queue: &wgpu::Queue, time: f32) {
-        self.frame_metadata.time = time * 0.001;
-        self.frame_metadata.set_camera_position(self.cam.position());
-
-        queue.write_buffer(
-            &self.uniform_buffers[0],
-            0,
-            bytemuck::cast_slice(&[self.frame_metadata][..]),
-        );
-
-        queue.write_buffer(
-            &self.uniform_buffers[1],
-            0,
-            bytemuck::cast_slice(&[self.cam.view_proj]),
-        );
+        if let Some(buffers) = self.uniform_buffers() {
+            if buffers.len() >= 2 {
+                renderer_context.queue.write_buffer(
+                    &buffers[0],
+                    0,
+                    bytemuck::cast_slice(&[fm_copy]),
+                );
+                renderer_context.queue.write_buffer(
+                    &buffers[1],
+                    0,
+                    bytemuck::cast_slice(&[view_proj_copy]),
+                );
+            }
+        }
     }
 }

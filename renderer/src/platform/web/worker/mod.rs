@@ -97,12 +97,14 @@ impl MainWorker {
             .unwrap();
     }
 
-    pub async fn run_render_loop(events_chan: Receiver<WindowEvent>) {
+    pub async fn run_render_loop<T: crate::renderer::scene::Scene + 'static>(
+        events_chan: Receiver<WindowEvent>,
+    ) {
         use crate::renderer::Renderer;
 
         let canvas = wait_for_canvas_transfer().await;
 
-        let renderer = Rc::new(RefCell::new(Renderer::new(canvas, events_chan).await));
+        let renderer = Rc::new(RefCell::new(Renderer::<T>::new(canvas, events_chan).await));
         Renderer::run_render_loop(renderer);
     }
 }

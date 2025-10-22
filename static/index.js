@@ -1,4 +1,4 @@
-import wbg_init, { main } from "../pkg/wasm-index.js";
+import wbg_init, { main } from "../level-editor/pkg/wasm-index.js";
 
 const start = async () => {
   await wbg_init();
