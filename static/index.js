@@ -1,4 +1,4 @@
-import wbg_init, { main } from "../level-editor/pkg/wasm-index.js";
+import wbg_init, { main } from "../level-editor/pkg/level_editor.js";
 
 const start = async () => {
   await wbg_init();
@@ -6,8 +6,8 @@ const start = async () => {
 };
 
 // Wait for DOM to be ready before starting
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', start);
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", start);
 } else {
   start();
 }

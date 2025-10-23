@@ -1,21 +1,36 @@
 # yawn
+
 yet another webgl ngine
 
+### Building
+
+Run
+
+```
+npm run dev
+```
+
+- Open http://localhost:8080
+- Write rust and see it in the browser
+
 ## accepted plans
-- most of the logic in service workers
-- ts / webgl based
+
+- most of the logic in workers and wasm
+- rust / wgpu based
 - as declarative as possible
 - no backwards compatibility until v1.0
 - as much geometric algebra as reasonable
 
 ## planned milestone
 
-- connect events from main thread to service worker
-- share canvas b/w sw
-- render triangle
+- [done] connect events from main thread to worker
+- [done] share canvas b/w worker
+- [done] render triangle
 
 ## Goal: All the good algorithms
+
 What algorithms are we planning to have,
+
 - gpu picking?
 - HZB occlusion + frustum/portal culling?
 - deferred + forward lighting?
@@ -52,16 +67,3 @@ What algorithms are we planning to have,
 - vr/ar?
 - dynamic textures?
 - shadow casting?
-
-## are we gon use ogl or start from scratch?
-
-## we need to decide architecture
-- ECS?
-- babylon-like
-- threejs-like
-
-- message passing?
-- observables?
-- events?
-- runnable on a server?
-- worker/main thread adaptable? or just worker?

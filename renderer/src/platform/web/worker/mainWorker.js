@@ -1,6 +1,6 @@
 // Generic worker that imports the app's WASM module relative to the generated pkg folder.
 // Works for any application because the relative depth from this file to pkg is stable.
-import initWasm, { worker_entrypoint } from "../../../../../../wasm-index.js";
+import initWasm, { worker_entrypoint } from "/level-editor/pkg/level_editor.js";
 
 export function attachMain() {}
 
