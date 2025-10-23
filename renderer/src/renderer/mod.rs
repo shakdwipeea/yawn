@@ -1,4 +1,10 @@
-use std::{cell::RefCell, collections::HashMap, marker::PhantomData, rc::Rc, sync::mpsc::Receiver};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    marker::PhantomData,
+    rc::Rc,
+    sync::mpsc::Receiver,
+};
 
 use futures::channel::oneshot;
 use log::info;
@@ -9,7 +15,7 @@ use web_sys::{DedicatedWorkerGlobalScope, File, MessageEvent};
 
 use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
-    message::{MouseMessage, ResizeMessage, WindowEvent},
+    message::{DrainEventError, MouseMessage, ResizeMessage, WindowEvent},
     renderer::scene::Scene,
 };
 
@@ -561,6 +567,8 @@ impl<T: Scene + 'static> Renderer<T> {
             }
             WindowEvent::PointerClick(msg) => {
                 {
+                    log::info!("click start");
+
                     let mut r = renderer.borrow_mut();
                     let x = (msg.offset_x * msg.scale_factor) as f32;
                     let y = (msg.offset_y * msg.scale_factor) as f32;
@@ -603,16 +611,32 @@ impl<T: Scene + 'static> Renderer<T> {
         }
     }
 
+    fn drain_events(renderer: &Rc<RefCell<Self>>) -> Result<(), DrainEventError> {
+        loop {
+            let event = renderer.try_borrow_mut()?
+                .events_chan.try_recv()?;
+
+            let renderer_clone = renderer.clone();
+            spawn_local(async move {
+                Self::handle_event(renderer_clone, event).await;
+            });
+        }
+    }
+
     pub fn run_render_loop(renderer: Rc<RefCell<Renderer<T>>>) {
         let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
             {
-                if let Ok(r) = renderer.try_borrow_mut() {
-                    let event = r.events_chan.try_recv();
-                    if let Ok(event) = event {
-                        let renderer_clone = renderer.clone();
-                        spawn_local(async move {
-                            Self::handle_event(renderer_clone, event).await;
-                        });
+                if let Err(e) = Self::drain_events(&renderer) {
+                    match e {
+                        DrainEventError::ChannelEmpty => {
+                            // Normal condition, no error needed
+                        }
+                        DrainEventError::ChannelDisconnected => {
+                            log::warn!("Event channel disconnected; stopping event polling");
+                        }
+                        DrainEventError::BorrowError(_) => {
+                            log::error!("Failed to borrow renderer: {}", e);
+                        }
                     }
                 }
             }
@@ -672,10 +696,7 @@ impl<T: Scene + 'static> Renderer<T> {
     pub async fn load_assets_async(renderer: Rc<RefCell<Renderer<T>>>) -> Result<(), ImportError> {
         let (device, surface_format) = {
             let r = renderer.borrow();
-            (
-                r.context.device.clone(),
-                r.context.surface_config.format,
-            )
+            (r.context.device.clone(), r.context.surface_config.format)
         };
 
         let mut meshes = Vec::new();
@@ -697,7 +718,7 @@ impl<T: Scene + 'static> Renderer<T> {
         {
             let mut r = renderer.borrow_mut();
             r.resources = original_resources;
-            
+
             for mesh in meshes {
                 r.scene.add_mesh(mesh);
             }
@@ -734,7 +755,9 @@ impl<T: Scene + 'static> Renderer<T> {
         Ok(())
     }
 
-    async fn show_file_picker_and_load(renderer: Rc<RefCell<Renderer<T>>>) -> Result<(), ImportError> {
+    async fn show_file_picker_and_load(
+        renderer: Rc<RefCell<Renderer<T>>>,
+    ) -> Result<(), ImportError> {
         // For now, we'll just call load_assets_async which loads the default model
         // In a full implementation, we'd modify load_gltf_model to accept the file data
         Self::load_assets_async(renderer).await
