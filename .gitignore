@@ -45,5 +45,4 @@ target/
 
 # WASM build artifacts
 .rsw/
-rsw.toml
 static/level-editor/
