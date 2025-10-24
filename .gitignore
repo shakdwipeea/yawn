@@ -42,3 +42,7 @@ target/
 /wasm-pack.log
 .vscode/
 .idea/
+
+# WASM build artifacts
+.rsw/
+static/level-editor/
