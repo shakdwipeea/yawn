@@ -1,11 +1,10 @@
-use std::sync::mpsc::Receiver;
-use std::{cell::RefCell, rc::Rc};
+use std::sync::mpsc::Sender;
 use ultraviolet::Mat4;
 use wasm_bindgen::prelude::*;
 
-use renderer::app_setup::WebApp;
+use renderer::app_setup::{WebApp, WebAppRuntime};
 use renderer::camera::Camera;
-use renderer::message::WindowEvent;
+use renderer::message::{OrbitMessage, WindowEvent, ZoomMessage};
 use renderer::renderer as gpu_renderer;
 use renderer::renderer::scene::{mesh_vertex_layout, FrameMetadata, Mesh, MeshBuilder};
 
@@ -205,17 +204,42 @@ impl EditorScene {
     }
 }
 
-/// Entrypoint for the level editor
+/// Handle returned from main() for controlling the application from JS.
 #[wasm_bindgen]
-pub fn main() {
+pub struct AppHandle {
+    sender: Sender<WindowEvent>,
+    _runtime: Box<WebAppRuntime>,
+}
+
+#[wasm_bindgen]
+impl AppHandle {
+    /// Orbit the camera by the given pixel deltas.
+    pub fn orbit_camera(&self, dx: f32, dy: f32) {
+        let _ = self.sender.send(WindowEvent::CameraOrbit(OrbitMessage {
+            delta_x: dx,
+            delta_y: dy,
+        }));
+    }
+
+    /// Zoom the camera by the given delta (negative = zoom in, positive = zoom out).
+    pub fn zoom_camera(&self, delta: f32) {
+        let _ = self.sender.send(WindowEvent::CameraZoom(ZoomMessage { delta }));
+    }
+}
+
+/// Entrypoint for the level editor - returns handle for JS interaction
+#[wasm_bindgen]
+pub fn start() -> AppHandle {
     std::panic::set_hook(Box::new(console_error_panic_hook::hook));
     wasm_logger::init(wasm_logger::Config::default());
 
-    wasm_bindgen_futures::spawn_local(async {
-        let runtime = LevelEditor::setup_runtime().unwrap();
-        // Keep the runtime running and prevent drops
-        Box::leak(Box::new(runtime));
-    });
+    let runtime = LevelEditor::setup_runtime().unwrap();
+    let sender = runtime.sender().clone();
+
+    AppHandle {
+        sender,
+        _runtime: Box::new(runtime),
+    }
 }
 
 renderer::export_worker_entrypoint!();

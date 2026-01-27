@@ -9,6 +9,8 @@ pub enum WindowEvent {
     PointerClick(MouseMessage),
     PointerWheel(WheelMessage),
     Keyboard(KeyboardMessage),
+    CameraOrbit(OrbitMessage),
+    CameraZoom(ZoomMessage),
 }
 
 // Display for WindowEvent
@@ -20,6 +22,8 @@ impl fmt::Display for WindowEvent {
             WindowEvent::PointerClick(msg) => write!(f, "PointerClick: {:?}", msg),
             WindowEvent::PointerWheel(msg) => write!(f, "PointerWheel: {:?}", msg),
             WindowEvent::Keyboard(msg) => write!(f, "Keyboard: {:?}", msg),
+            WindowEvent::CameraOrbit(msg) => write!(f, "CameraOrbit: {:?}", msg),
+            WindowEvent::CameraZoom(msg) => write!(f, "CameraZoom: {:?}", msg),
         }
     }
 }
@@ -112,6 +116,17 @@ impl KeyboardMessage {
             repeat: event.repeat(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct OrbitMessage {
+    pub delta_x: f32,
+    pub delta_y: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ZoomMessage {
+    pub delta: f32,
 }
 
 #[derive(Debug)]

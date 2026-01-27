@@ -15,7 +15,7 @@ use web_sys::{DedicatedWorkerGlobalScope, File, MessageEvent};
 
 use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
-    message::{DrainEventError, MouseMessage, ResizeMessage, WindowEvent},
+    message::{DrainEventError, MouseMessage, ResizeMessage, WheelMessage, WindowEvent},
     renderer::scene::Scene,
 };
 
@@ -606,6 +606,25 @@ impl<T: Scene + 'static> Renderer<T> {
                             log::error!("Failed to load file: {:?}", e);
                         }
                     });
+                }
+            }
+            WindowEvent::CameraOrbit(msg) => {
+                let mut r = renderer.borrow_mut();
+                r.scene.handle_orbit(msg.delta_x, msg.delta_y);
+            }
+            WindowEvent::CameraZoom(msg) => {
+                let mut r = renderer.borrow_mut();
+                let wheel_msg = WheelMessage {
+                    scale_factor: 1.0,
+                    delta_x: 0.0,
+                    delta_y: msg.delta as f64,
+                    delta_z: 0.0,
+                    delta_mode: 0,
+                    client_x: 0.0,
+                    client_y: 0.0,
+                };
+                if let Some(cam) = r.scene.camera_mut() {
+                    cam.zoom(&wheel_msg);
                 }
             }
         }

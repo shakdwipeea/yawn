@@ -1,13 +1,16 @@
-import wbg_init, { main } from "../level-editor/pkg/level_editor.js";
+import wbg_init, { start } from "../level-editor/pkg/level_editor.js";
 
-const start = async () => {
+const init = async () => {
   await wbg_init();
-  main();
+  const app = start();
+
+  // Expose globally for console access
+  window.app = app;
 };
 
 // Wait for DOM to be ready before starting
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", start);
+  document.addEventListener("DOMContentLoaded", init);
 } else {
-  start();
+  init();
 }
