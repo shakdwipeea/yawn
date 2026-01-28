@@ -15,7 +15,7 @@ use web_sys::DedicatedWorkerGlobalScope;
 
 use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
-    message::{DrainEventError, MouseMessage, ResizeMessage, WheelMessage, WindowEvent},
+    message::{MouseMessage, ResizeMessage, WheelMessage, WindowEvent},
     renderer::scene::Scene,
 };
 
@@ -630,32 +630,50 @@ impl<T: Scene + 'static> Renderer<T> {
         }
     }
 
-    fn drain_events(renderer: &Rc<RefCell<Self>>) -> Result<(), DrainEventError> {
-        loop {
-            let event = renderer.try_borrow_mut()?
-                .events_chan.try_recv()?;
-
-            let renderer_clone = renderer.clone();
-            spawn_local(async move {
-                Self::handle_event(renderer_clone, event).await;
-            });
-        }
-    }
-
     pub fn run_render_loop(renderer: Rc<RefCell<Renderer<T>>>) {
         let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
+            // Drain all queued events, coalescing pointer moves into a single accumulated delta
             {
-                if let Err(e) = Self::drain_events(&renderer) {
-                    match e {
-                        DrainEventError::ChannelEmpty => {
-                            // Normal condition, no error needed
+                if let Ok(r) = renderer.try_borrow_mut() {
+                    let mut coalesced_move: Option<MouseMessage> = None;
+                    let mut other_events: Vec<WindowEvent> = Vec::new();
+
+                    // Drain all available events
+                    while let Ok(event) = r.events_chan.try_recv() {
+                        match event {
+                            WindowEvent::PointerMove(msg) => {
+                                // Coalesce pointer moves: accumulate movement deltas
+                                if let Some(ref mut prev) = coalesced_move {
+                                    prev.movement_x += msg.movement_x;
+                                    prev.movement_y += msg.movement_y;
+                                    // Keep latest position/button state
+                                    prev.client_x = msg.client_x;
+                                    prev.client_y = msg.client_y;
+                                    prev.offset_x = msg.offset_x;
+                                    prev.offset_y = msg.offset_y;
+                                    prev.buttons = msg.buttons;
+                                } else {
+                                    coalesced_move = Some(msg);
+                                }
+                            }
+                            other => other_events.push(other),
                         }
-                        DrainEventError::ChannelDisconnected => {
-                            log::warn!("Event channel disconnected; stopping event polling");
-                        }
-                        DrainEventError::BorrowError(_) => {
-                            log::error!("Failed to borrow renderer: {}", e);
-                        }
+                    }
+
+                    // Process coalesced pointer move first (if any)
+                    if let Some(msg) = coalesced_move {
+                        let renderer_clone = renderer.clone();
+                        spawn_local(async move {
+                            Self::handle_event(renderer_clone, WindowEvent::PointerMove(msg)).await;
+                        });
+                    }
+
+                    // Process other events
+                    for event in other_events {
+                        let renderer_clone = renderer.clone();
+                        spawn_local(async move {
+                            Self::handle_event(renderer_clone, event).await;
+                        });
                     }
                 }
             }

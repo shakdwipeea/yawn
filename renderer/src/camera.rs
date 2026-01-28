@@ -15,10 +15,10 @@ pub struct Camera {
     // Hot data - cached computed matrix (64 bytes, 1 cache line)
     pub view_proj: [[f32; 4]; 4],
 
-    // Warm data - frequently accessed vectors (36 bytes)
+    // Derived position (computed from yaw/pitch/distance + target)
     position: Vec3,
+    // Orbit pivot point
     target: Vec3,
-    up: Vec3,
 
     // Cold data - projection parameters (16 bytes)
     fov: f32,
@@ -26,52 +26,13 @@ pub struct Camera {
     z_near: f32,
     z_far: f32,
 
-    // Rotor orientation for orbit camera behaviour
-    rotor: Rotor3,
+    // Spherical coordinates for orbit (world-up preserving)
+    yaw: f32,   // Rotation around world Y axis (radians)
+    pitch: f32, // Tilt up/down from horizon (radians), clamped to avoid poles
     distance: f32,
 
     // Dirty flag for lazy evaluation
     dirty: bool,
-}
-
-struct OrthonormalBasis {
-    right: Vec3,
-    up: Vec3,
-    forward: Vec3,
-}
-
-impl OrthonormalBasis {
-    pub fn new(right: Vec3, up: Vec3, forward: Vec3) -> Self {
-        Self { right, up, forward }
-    }
-
-    pub fn from_camera(camera: &Camera) -> Self {
-        let mut forward_offset = camera.target - camera.position;
-        if forward_offset.mag_sq() <= f32::EPSILON {
-            forward_offset = -Vec3::unit_z();
-        }
-
-        let forward = forward_offset.normalized();
-
-        let mut right = forward.cross(camera.up);
-
-        // Check if right vector is near zero (forward and up are parallel)
-        if right.mag_sq() < 1e-10 {
-            // Try alternate axes to find a valid right vector
-            let alternate_axes = [Vec3::unit_y(), Vec3::unit_x()];
-            for axis in alternate_axes.iter() {
-                right = forward.cross(*axis);
-                if right.mag_sq() >= 1e-10 {
-                    break;
-                }
-            }
-        }
-
-        right = right.normalized();
-        let up = right.cross(forward).normalized();
-
-        Self::new(right, up, forward)
-    }
 }
 
 #[repr(C)]
@@ -84,26 +45,54 @@ impl Camera {
     pub fn new(aspect_ratio: f32) -> Self {
         let mut camera = Camera {
             view_proj: [[0.0; 4]; 4],
-            position: Vec3::new(0.0, 0.5, 3.0),
-            target: Vec3::new(0.0, 0.0, 0.0),
-            up: Vec3::unit_y(),
+            position: Vec3::zero(),
+            target: Vec3::zero(),
             fov: PI / 3.0,
             aspect_ratio,
             z_near: 0.1,
             z_far: 100000.0,
-            rotor: Rotor3::identity(),
-            distance: 1.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            distance: 3.0,
             dirty: true,
         };
 
-        camera.compute_rotor();
+        camera.update_position_from_spherical();
         camera.compute_view_proj_mat();
 
         camera
     }
 
+    /// Compute the orbit rotor from current yaw and pitch.
+    /// Yaw rotates around world Y, then pitch tilts around the local right axis.
+    fn orbit_rotor(&self) -> Rotor3 {
+        let yaw_rotor =
+            Rotor3::from_angle_plane(self.yaw, Bivec3::from_normalized_axis(Vec3::unit_y()));
+
+        // Right axis after yaw rotation
+        let mut right = Vec3::unit_x();
+        yaw_rotor.rotate_vec(&mut right);
+
+        let pitch_rotor = Rotor3::from_angle_plane(self.pitch, Bivec3::from_normalized_axis(right));
+
+        // Compose: first yaw, then pitch
+        (pitch_rotor * yaw_rotor).normalized()
+    }
+
+    /// Recompute position from spherical coordinates (yaw, pitch, distance) around target.
+    fn update_position_from_spherical(&mut self) {
+        let rotor = self.orbit_rotor();
+
+        // Start with camera behind target along +Z axis
+        let mut offset = Vec3::new(0.0, 0.0, self.distance);
+        rotor.rotate_vec(&mut offset);
+
+        self.position = self.target + offset;
+    }
+
     pub fn compute_view_proj_mat(&mut self) {
-        let view = Mat4::look_at(self.position, self.target, self.up);
+        // World-up is always Y for the view matrix
+        let view = Mat4::look_at(self.position, self.target, Vec3::unit_y());
         let proj = projection::rh_yup::perspective_wgpu_dx(
             self.fov,
             self.aspect_ratio,
@@ -115,10 +104,22 @@ impl Camera {
     }
 
     pub fn look_at(&mut self, position: Vec3, target: Vec3) {
-        self.position = position;
         self.target = target;
-        self.up = Vec3::unit_y();
-        self.compute_rotor();
+
+        // Compute spherical coordinates from the given position
+        let offset = position - target;
+        self.distance = offset.mag().max(MIN_DISTANCE);
+
+        // Extract yaw and pitch from offset direction
+        let dir = offset / self.distance;
+
+        // Pitch: angle from horizontal plane (asin of y component)
+        self.pitch = dir.y.clamp(-1.0, 1.0).asin().clamp(-MAX_PITCH, MAX_PITCH);
+
+        // Yaw: angle around Y axis from +Z axis
+        self.yaw = dir.x.atan2(dir.z);
+
+        self.update_position_from_spherical();
         self.dirty = true;
         self.compute_view_proj_mat();
     }
@@ -150,30 +151,16 @@ impl Camera {
             return;
         }
 
-        let yaw_theta = delta_x * ORBIT_SENSITIVITY;
-        let yaw_rotor =
-            Rotor3::from_angle_plane(yaw_theta, Bivec3::from_normalized_axis(Vec3::unit_y()));
+        // Update yaw (horizontal rotation around world Y)
+        // Negative because dragging right should rotate camera to the left (view rotates right)
+        self.yaw -= delta_x * ORBIT_SENSITIVITY;
 
-        let basis = OrthonormalBasis::from_camera(self);
+        // Update pitch (vertical tilt), clamped to avoid poles
+        // Negative because dragging down should tilt camera up
+        self.pitch -= delta_y * ORBIT_SENSITIVITY;
+        self.pitch = self.pitch.clamp(-MAX_PITCH, MAX_PITCH);
 
-        let pitch_angle = (delta_y * ORBIT_SENSITIVITY).clamp(-MAX_PITCH, MAX_PITCH);
-
-        let pitch_rotor =
-            Rotor3::from_angle_plane(pitch_angle, Bivec3::from_normalized_axis(basis.right));
-
-        let orbit_rotor = (yaw_rotor * pitch_rotor).normalized();
-
-        self.rotor = (orbit_rotor * self.rotor).normalized();
-
-        let mut offset = self.position - self.target;
-        if offset.mag_sq() <= f32::EPSILON {
-            offset = Vec3::unit_z() * self.distance.max(MIN_DISTANCE);
-        }
-
-        orbit_rotor.rotate_vec(&mut offset);
-        self.distance = offset.mag().max(MIN_DISTANCE);
-        self.position = offset + self.target;
-
+        self.update_position_from_spherical();
         self.dirty = true;
         self.compute_view_proj_mat();
     }
@@ -188,29 +175,20 @@ impl Camera {
             _ => {}
         }
 
-        // Scrolling up should zoom in.
+        // Scrolling up should zoom in (reduce distance).
         delta = -delta;
 
         if delta.abs() <= f32::EPSILON {
             return;
         }
 
-        // Get forward direction from camera position to target
-        let mut forward_vec = self.target - self.position;
-        if forward_vec.mag_sq() <= f32::EPSILON {
-            forward_vec = Vec3::unit_z();
-        }
-        let forward_dir = forward_vec.normalized();
-        let current_distance = forward_vec.mag();
+        // Scale dolly movement by current distance for consistent perceived zoom speed
+        let dolly_amount = delta * ZOOM_SENSITIVITY * self.distance;
 
-        // Scale dolly movement by distance to target for consistent perceived zoom speed
-        let dolly_distance = delta * ZOOM_SENSITIVITY * current_distance;
-        let dolly_translation = forward_dir * dolly_distance;
+        // Move position toward/away from target by adjusting distance
+        self.distance = (self.distance - dolly_amount).max(MIN_DISTANCE);
 
-        self.position += dolly_translation;
-        self.target += dolly_translation;
-
-        self.compute_rotor();
+        self.update_position_from_spherical();
         self.dirty = true;
         self.compute_view_proj_mat();
     }
@@ -250,51 +228,5 @@ impl Camera {
             bind_group,
             bind_group_layout,
         }
-    }
-
-    fn compute_rotor(&mut self) {
-        let offset = self.position - self.target;
-        let distance = (offset.x * offset.x + offset.y * offset.y + offset.z * offset.z).sqrt();
-        self.distance = distance.max(MIN_DISTANCE);
-
-        // to compute the initial rotor we will do two rotations
-        // these will orient the camera to the new coordinates
-        //
-
-        // but first we need the orthonormal basis for the current camera
-        let basis = OrthonormalBasis::from_camera(self);
-
-        // first rotation
-        // this is the swing to make position face the target
-        let camera_local_up = Vec3::unit_z();
-        let swing_rotor = Rotor3::from_rotation_between(camera_local_up, -basis.forward);
-
-        // now we need a twist rotor which aligns the camera up
-        let mut up_after_swing = self.up.clone();
-        swing_rotor.rotate_vec(&mut up_after_swing);
-
-        // to rotate a vector by a rotor we need
-        // - a bivector (represents the axis of rotation)
-        // - angle of rotation
-        let twist_axis = (-basis.forward).normalized();
-        let twist_plane = Bivec3::from_normalized_axis(twist_axis);
-
-        // Calculate twist angle between the up vectors:
-        //            u1 × uc ⋅ (-f)
-        // θ = atan2( ————————————— , u1 ⋅ uc )
-        //              ‖u1 × uc‖
-        //
-        // Where:
-        //   u1 = up vector after swing rotation
-        //   uc = camera's current up vector
-        //   f = forward vector (twist axis)
-        let theta = up_after_swing
-            .cross(self.up)
-            .dot(twist_axis)
-            .atan2(up_after_swing.dot(self.up));
-
-        let twist_rotor = Rotor3::from_angle_plane(theta, twist_plane);
-
-        self.rotor = (swing_rotor * twist_rotor).normalized();
     }
 }
