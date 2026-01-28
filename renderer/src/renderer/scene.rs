@@ -305,6 +305,7 @@ pub trait Scene: Sized {
     fn handle_orbit(&mut self, delta_x: f32, delta_y: f32);
     fn clear(&mut self);
     fn add_mesh(&mut self, mesh: Mesh);
+    fn camera_depth_range(&self) -> (f32, f32);
     fn set_camera_depth_range(&mut self, near: f32, far: f32);
     fn set_camera_look_at(&mut self, eye: ultraviolet::Vec3, center: ultraviolet::Vec3);
 

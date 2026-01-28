@@ -123,6 +123,10 @@ impl Camera {
         self.compute_view_proj_mat();
     }
 
+    pub fn depth_range(&self) -> (f32, f32) {
+        (self.z_near, self.z_far)
+    }
+
     pub fn set_depth_range(&mut self, z_near: f32, z_far: f32) {
         self.z_near = z_near;
         self.z_far = z_far.max(z_near + f32::EPSILON);

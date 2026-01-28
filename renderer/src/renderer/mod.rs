@@ -10,8 +10,8 @@ use futures::channel::oneshot;
 use log::info;
 use ultraviolet::Vec4;
 use wasm_bindgen::{prelude::Closure, JsCast};
-use wasm_bindgen_futures::{spawn_local, JsFuture};
-use web_sys::{DedicatedWorkerGlobalScope, File, MessageEvent};
+use wasm_bindgen_futures::spawn_local;
+use web_sys::DedicatedWorkerGlobalScope;
 
 use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
@@ -380,7 +380,7 @@ impl<T: Scene + 'static> Renderer<T> {
         }
     }
 
-    fn render(&mut self, time: f32) {
+    fn render(&mut self, _time: f32) {
         self.scene.update(&self.context, &mut self.resources);
 
         let surface_texture = self.context.surface.get_current_texture().unwrap();
@@ -720,55 +720,54 @@ impl<T: Scene + 'static> Renderer<T> {
 
         let mut meshes = Vec::new();
 
-        let mut original_resources = {
-            let mut r = renderer.borrow_mut();
-            r.scene.clear();
-            std::mem::take(&mut r.resources)
-        };
+        // Don't clear the scene - add to existing content
+        let mut r = renderer.borrow_mut();
 
         let bounds = load_gltf_model(
             &device,
-            &mut original_resources,
+            &mut r.resources,
             &mut meshes,
             surface_format,
         )
         .await?;
 
-        {
-            let mut r = renderer.borrow_mut();
-            r.resources = original_resources;
+        for mesh in meshes {
+            r.scene.add_mesh(mesh);
+        }
 
-            for mesh in meshes {
-                r.scene.add_mesh(mesh);
-            }
+        // Optional: Adjust camera to frame the newly added model
+        if let Some(ModelBounds { min, max }) = bounds {
+            let center = ultraviolet::Vec3::new(
+                (min[0] + max[0]) * 0.5,
+                (min[1] + max[1]) * 0.5,
+                (min[2] + max[2]) * 0.5,
+            );
 
-            if let Some(ModelBounds { min, max }) = bounds {
-                let center = ultraviolet::Vec3::new(
-                    (min[0] + max[0]) * 0.5,
-                    (min[1] + max[1]) * 0.5,
-                    (min[2] + max[2]) * 0.5,
-                );
+            let extent =
+                ultraviolet::Vec3::new(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+            let radius =
+                0.5 * (extent.x * extent.x + extent.y * extent.y + extent.z * extent.z).sqrt();
+            let radius = radius.max(1.0);
 
-                let extent =
-                    ultraviolet::Vec3::new(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
-                let radius =
-                    0.5 * (extent.x * extent.x + extent.y * extent.y + extent.z * extent.z).sqrt();
-                let radius = radius.max(1.0);
+            // set the camera position after load, so we are not disoriented
+            let eye_offset = ultraviolet::Vec3::new(0.0, radius * 0.05, radius * 0.25);
 
-                // set the camera position after load, so we are not disoriented
-                let eye_offset = ultraviolet::Vec3::new(0.0, radius * 0.05, radius * 0.25);
+            // Keep the near plane proportional to the model size to avoid
+            // extreme depth ranges when loading very large assets
+            let near_plane = (radius * 0.001).max(0.1);
 
-                // Keep the near plane proportional to the model size to avoid
-                // extreme depth ranges when loading very large assets
-                let near_plane = (radius * 0.001).max(0.1);
+            // The far plane must be far enough to cover the entire model.
+            // Using a fixed upper clamp caused large models to be clipped
+            // completely; relying on the model radius instead.
+            let far_plane = (radius * 4.0).max(near_plane + 1.0);
 
-                // The far plane must be far enough to cover the entire model.
-                // Using a fixed upper clamp caused large models to be clipped
-                // completely; relying on the model radius instead.
-                let far_plane = (radius * 4.0).max(near_plane + 1.0);
-                r.scene.set_camera_depth_range(near_plane, far_plane);
-                r.scene.set_camera_look_at(center + eye_offset, center);
-            }
+            // Only expand the depth range, never shrink it. This prevents
+            // loading a small model from clipping objects already in the scene.
+            let (current_near, current_far) = r.scene.camera_depth_range();
+            let new_near = near_plane.min(current_near);
+            let new_far = far_plane.max(current_far);
+            r.scene.set_camera_depth_range(new_near, new_far);
+            r.scene.set_camera_look_at(center + eye_offset, center);
         }
 
         Ok(())

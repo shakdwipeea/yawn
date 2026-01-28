@@ -171,25 +171,22 @@ fn visit_node<'a>(
     }
 }
 
-pub async fn load_gltf_model(
+fn load_gltf_from_bytes(
     device: &wgpu::Device,
     resources: &mut crate::renderer::GpuResources,
     meshes: &mut Vec<crate::renderer::scene::Mesh>,
     surface_format: TextureFormat,
+    glb_data: &[u8],
+    pipeline_name: &str,
 ) -> Result<Option<ModelBounds>, ImportError> {
-    let glb_data = reqwest::get("http://localhost:8080/themanor.glb")
-        .await?
-        .bytes()
-        .await?;
-
-    let model = Gltf::from_slice(&glb_data)?;
+    let model = Gltf::from_slice(glb_data)?;
     let data_blob = model.blob.as_ref().ok_or(ImportError::LoadError)?;
 
     let vertex_layout = mesh_vertex_layout();
 
     let pipeline_index = resources.get_or_create_pipeline(
         device,
-        "gltf_standard",
+        pipeline_name,
         &vertex_layout,
         include_str!("./gltf.wgsl"),
         surface_format,
@@ -213,4 +210,31 @@ pub async fn load_gltf_model(
     }
 
     Ok(model_bounds)
+}
+
+pub async fn load_gltf_model(
+    device: &wgpu::Device,
+    resources: &mut crate::renderer::GpuResources,
+    meshes: &mut Vec<crate::renderer::scene::Mesh>,
+    surface_format: TextureFormat,
+) -> Result<Option<ModelBounds>, ImportError> {
+    let glb_data = reqwest::get("http://localhost:8080/lantern.glb")
+        .await?
+        .bytes()
+        .await?;
+
+    load_gltf_from_bytes(device, resources, meshes, surface_format, &glb_data, "gltf_standard")
+}
+
+pub async fn load_gltf_model_from_url(
+    device: &wgpu::Device,
+    resources: &mut crate::renderer::GpuResources,
+    meshes: &mut Vec<crate::renderer::scene::Mesh>,
+    surface_format: TextureFormat,
+    url: &str,
+    pipeline_name: &str,
+) -> Result<Option<ModelBounds>, ImportError> {
+    let glb_data = reqwest::get(url).await?.bytes().await?;
+
+    load_gltf_from_bytes(device, resources, meshes, surface_format, &glb_data, pipeline_name)
 }

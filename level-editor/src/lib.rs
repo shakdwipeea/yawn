@@ -6,6 +6,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use renderer::app_setup::{WebApp, WebAppRuntime};
 use renderer::camera::Camera;
+
 use renderer::message::{OrbitMessage, WindowEvent, ZoomMessage};
 use renderer::renderer as gpu_renderer;
 use renderer::renderer::scene::{mesh_vertex_layout, FrameMetadata, Mesh, MeshBuilder};
@@ -69,8 +70,8 @@ impl renderer::renderer::scene::Scene for EditorScene {
 
         // Position camera appropriately for the scaled scene (100x scale)
         scene.cam.look_at(
-            Vec3::new(0.0, 400.0, 600.0),  // Eye position: above and behind
-            Vec3::new(0.0, 0.0, 0.0),       // Look at origin
+            Vec3::new(0.0, 400.0, 600.0), // Eye position: above and behind
+            Vec3::new(0.0, 0.0, 0.0),     // Look at origin
         );
 
         scene
@@ -100,8 +101,18 @@ impl renderer::renderer::scene::Scene for EditorScene {
         self.frame_metadata.mouse_click = [x, y];
     }
 
-    fn handle_zoom(&mut self, _delta_y: f32) {
-        // TODO: Implement zoom properly when Camera exposes necessary methods
+    fn handle_zoom(&mut self, delta_y: f32) {
+        use renderer::message::WheelMessage;
+        let wheel_msg = WheelMessage {
+            scale_factor: 1.0,
+            delta_x: 0.0,
+            delta_y: delta_y as f64,
+            delta_z: 0.0,
+            delta_mode: 1, // DOM_DELTA_LINE
+            client_x: 0.0,
+            client_y: 0.0,
+        };
+        self.cam.zoom(&wheel_msg);
     }
 
     fn handle_orbit(&mut self, delta_x: f32, delta_y: f32) {
@@ -114,6 +125,10 @@ impl renderer::renderer::scene::Scene for EditorScene {
 
     fn add_mesh(&mut self, mesh: Mesh) {
         self.meshes.push(mesh);
+    }
+
+    fn camera_depth_range(&self) -> (f32, f32) {
+        self.cam.depth_range()
     }
 
     fn set_camera_depth_range(&mut self, near: f32, far: f32) {
@@ -321,7 +336,13 @@ impl EditorScene {
         let model_matrix = Mat4::from_translation(position) * Mat4::from_scale(size);
 
         MeshBuilder::default()
-            .with_vertices(device, resources, Self::BOX_POSITIONS, Self::BOX_NORMALS, Self::BOX_UVS)
+            .with_vertices(
+                device,
+                resources,
+                Self::BOX_POSITIONS,
+                Self::BOX_NORMALS,
+                Self::BOX_UVS,
+            )
             .with_indices(device, resources, Self::BOX_INDICES)
             .with_pipeline(pipeline_index)
             .with_model_matrix(device, resources, model_matrix)
@@ -436,7 +457,9 @@ impl AppHandle {
 
     /// Zoom the camera by the given delta (negative = zoom in, positive = zoom out).
     pub fn zoom_camera(&self, delta: f32) {
-        let _ = self.sender.send(WindowEvent::CameraZoom(ZoomMessage { delta }));
+        let _ = self
+            .sender
+            .send(WindowEvent::CameraZoom(ZoomMessage { delta }));
     }
 }
 
