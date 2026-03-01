@@ -27,8 +27,8 @@ pub struct EventListeners {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl EventListeners {
-    pub fn new() -> Self {
+impl Default for EventListeners {
+    fn default() -> Self {
         Self {
             resize_listener: None,
             mousemove_listener: None,
@@ -160,7 +160,10 @@ pub struct WebAppRuntime {
 #[cfg(target_arch = "wasm32")]
 impl WebAppRuntime {
     /// Initialize the web worker, canvas ownership, and event listeners.
-    pub fn new<T: crate::renderer::scene::Scene + 'static>(worker_name: &str, canvas_selector: &str) -> Result<Self, JsValue> {
+    pub fn new<T: crate::renderer::scene::Scene + 'static>(
+        worker_name: &str,
+        canvas_selector: &str,
+    ) -> Result<Self, JsValue> {
         let (sender, receiver) = mpsc::channel::<WindowEvent>();
 
         let canvas = web::get_canvas_element(canvas_selector);
@@ -212,10 +215,8 @@ pub trait WebApp {
 
     /// Perform the default WASM initialization routine.
     fn setup_runtime() -> Result<WebAppRuntime, JsValue> {
-        let mut runtime = WebAppRuntime::new::<Self::Scene>(
-            Self::worker_name(),
-            Self::canvas_selector(),
-        )?;
+        let mut runtime =
+            WebAppRuntime::new::<Self::Scene>(Self::worker_name(), Self::canvas_selector())?;
         Self::on_runtime_initialized(&mut runtime);
         Ok(runtime)
     }
