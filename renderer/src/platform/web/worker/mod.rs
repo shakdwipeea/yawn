@@ -1,8 +1,6 @@
 #[cfg(target_arch = "wasm32")]
 mod imp {
-    use crate::message::WindowEvent;
     use log::info;
-    use std::sync::mpsc::Receiver;
     use std::{fmt::Debug, ops::Deref};
     use wasm_bindgen::{prelude::*, JsValue};
     use wasm_bindgen_futures::JsFuture;
@@ -93,15 +91,6 @@ mod imp {
                 .post_message_with_transfer(&offscreen_canvas, &transfer_list)
                 .unwrap();
         }
-
-        pub async fn run_render_loop(events_chan: Receiver<WindowEvent>) {
-            use crate::renderer::{surface::SurfaceContext, Renderer};
-
-            let canvas = wait_for_canvas_transfer().await;
-            let surface_context = SurfaceContext::from_offscreen_canvas(canvas);
-            let renderer = Renderer::new(surface_context).await;
-            renderer.run(events_chan);
-        }
     }
 
     impl Deref for MainWorker {
@@ -145,8 +134,6 @@ mod imp {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod imp {
-    use crate::message::WindowEvent;
-    use std::sync::mpsc::Receiver;
     use wasm_bindgen::JsValue;
 
     #[derive(Debug)]
@@ -165,10 +152,6 @@ mod imp {
 
         pub fn transfer_ownership(&self, _canvas: &web_sys::HtmlCanvasElement) {
             panic!("platform::web::worker::transfer_ownership is only available on wasm32");
-        }
-
-        pub async fn run_render_loop(_events_chan: Receiver<WindowEvent>) {
-            panic!("platform::web::worker::run_render_loop is only available on wasm32");
         }
     }
 

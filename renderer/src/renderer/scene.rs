@@ -358,8 +358,8 @@ impl Scene {
         &mut self,
         renderer_context: &renderer::RendererContext,
         _resources: &mut GpuResources,
+        time: f32,
     ) {
-        let time = (js_sys::Date::now() as f32) * 0.001;
         self.frame_metadata.time = time;
         self.frame_metadata.set_camera_position(self.cam.position());
 

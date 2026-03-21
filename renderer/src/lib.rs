@@ -4,6 +4,7 @@ pub mod gltf;
 pub mod message;
 pub mod platform;
 pub mod renderer;
+pub mod task;
 
 #[cfg(target_arch = "wasm32")]
 /// Worker entrypoint helper - executes the closure it is spawned with

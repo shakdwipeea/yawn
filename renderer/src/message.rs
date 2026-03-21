@@ -4,6 +4,17 @@ use std::cell::BorrowMutError;
 
 #[derive(Debug)]
 pub enum WindowEvent {
+    Sync(SyncWindowEvent),
+    Async(AsyncWindowEvent),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncWindowEvent {
+    LoadGltf,
+}
+
+#[derive(Debug)]
+pub enum SyncWindowEvent {
     Resize(ResizeMessage),
     PointerMove(MouseMessage),
     PointerClick(MouseMessage),
@@ -32,18 +43,11 @@ pub enum SceneCommand {
     SetCameraLookAt { eye: [f32; 3], target: [f32; 3] },
 }
 
-// Display for WindowEvent
 impl fmt::Display for WindowEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WindowEvent::Resize(msg) => write!(f, "Resize: {:?}", msg),
-            WindowEvent::PointerMove(msg) => write!(f, "PointerMove: {:?}", msg),
-            WindowEvent::PointerClick(msg) => write!(f, "PointerClick: {:?}", msg),
-            WindowEvent::PointerWheel(msg) => write!(f, "PointerWheel: {:?}", msg),
-            WindowEvent::Keyboard(msg) => write!(f, "Keyboard: {:?}", msg),
-            WindowEvent::CameraOrbit(msg) => write!(f, "CameraOrbit: {:?}", msg),
-            WindowEvent::CameraZoom(msg) => write!(f, "CameraZoom: {:?}", msg),
-            WindowEvent::SceneCommand(msg) => write!(f, "SceneCommand: {:?}", msg),
+            WindowEvent::Sync(evt) => write!(f, "Sync({:?})", evt),
+            WindowEvent::Async(evt) => write!(f, "Async({:?})", evt),
         }
     }
 }
@@ -69,6 +73,7 @@ pub struct MouseMessage {
 }
 
 impl MouseMessage {
+    #[cfg(target_arch = "wasm32")]
     pub fn from_evt(event: web_sys::MouseEvent) -> Self {
         let window = web_sys::window().unwrap();
         Self {
@@ -97,6 +102,7 @@ pub struct WheelMessage {
 }
 
 impl WheelMessage {
+    #[cfg(target_arch = "wasm32")]
     pub fn from_evt(event: web_sys::WheelEvent) -> Self {
         let window = web_sys::window().unwrap();
         Self {
@@ -124,6 +130,7 @@ pub struct KeyboardMessage {
 }
 
 impl KeyboardMessage {
+    #[cfg(target_arch = "wasm32")]
     pub fn from_evt(event: web_sys::KeyboardEvent) -> Self {
         Self {
             key: event.key(),

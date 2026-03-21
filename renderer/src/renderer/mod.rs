@@ -1,21 +1,19 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    marker::PhantomData,
-    rc::Rc,
-    sync::mpsc::Receiver,
-};
+use std::{collections::HashMap, marker::PhantomData, sync::mpsc::Sender};
+
+#[cfg(target_arch = "wasm32")]
+use std::{cell::RefCell, rc::Rc};
 
 use futures::channel::oneshot;
 use log::info;
 use ultraviolet::Vec4;
-use wasm_bindgen::{prelude::Closure, JsCast};
-use wasm_bindgen_futures::spawn_local;
-use web_sys::DedicatedWorkerGlobalScope;
+
+use crate::gltf::{load_gltf_model, ImportError, ModelBounds};
 
 use crate::{
-    gltf::{load_gltf_model, ImportError, ModelBounds},
-    message::{MeshData, MouseMessage, ResizeMessage, SceneCommand, WheelMessage, WindowEvent},
+    message::{
+        AsyncWindowEvent, MeshData, MouseMessage, ResizeMessage, SceneCommand, SyncWindowEvent,
+        WheelMessage, WindowEvent,
+    },
     renderer::surface::{SurfaceContext, WindowDimension},
 };
 
@@ -271,6 +269,7 @@ pub struct Renderer {
     context: RendererContext,
     resources: GpuResources,
     scene: scene::Scene,
+    sender: Sender<WindowEvent>,
 }
 
 impl Renderer {
@@ -307,7 +306,7 @@ impl Renderer {
         self.context.depth_view = view;
     }
 
-    pub async fn new(surface_context: SurfaceContext) -> Self {
+    pub async fn new(surface_context: SurfaceContext, sender: Sender<WindowEvent>) -> Self {
         let SurfaceContext { target, size } = surface_context;
         let id = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -375,11 +374,12 @@ impl Renderer {
             context,
             scene,
             resources,
+            sender,
         }
     }
 
-    fn render(&mut self, _time: f32) {
-        self.scene.update(&self.context, &mut self.resources);
+    pub fn render(&mut self, time: f32) {
+        self.scene.update(&self.context, &mut self.resources, time);
 
         let surface_texture = self.context.surface.get_current_texture().unwrap();
         let texture_view = surface_texture.texture.create_view(&Default::default());
@@ -555,85 +555,104 @@ impl Renderer {
         Vec4::new(depth_value, 0.0, 0.0, 0.0)
     }
 
-    pub async fn handle_event(renderer: Rc<RefCell<Self>>, event: WindowEvent) {
-        match event {
-            WindowEvent::PointerMove(msg) => {
-                renderer.borrow_mut().mouse_move(msg);
+    pub fn tick(
+        renderer: &Rc<RefCell<Renderer>>,
+        events_chan: &std::sync::mpsc::Receiver<WindowEvent>,
+        time: f32,
+    ) {
+        if let Ok(mut r) = renderer.try_borrow_mut() {
+            let mut events = Vec::new();
+            while let Ok(event) = events_chan.try_recv() {
+                events.push(event);
             }
-            WindowEvent::Resize(msg) => {
-                renderer.borrow_mut().resize(msg);
-            }
-            WindowEvent::PointerClick(msg) => {
-                {
-                    log::info!("click start");
 
-                    let mut r = renderer.borrow_mut();
-                    let x = (msg.offset_x * msg.scale_factor) as f32;
-                    let y = (msg.offset_y * msg.scale_factor) as f32;
-                    r.scene.frame_metadata.mouse_click = [x, y];
-                    log::info!("clicked");
-                }
+            let mut coalesced_move: Option<MouseMessage> = None;
 
-                // Read pixel from depth texture at click coordinates
-                // let renderer_clone = renderer.clone();
-                // let x_coord = msg.offset_x as u32;
-                // let y_coord = msg.offset_y as u32;
-                // let pixel_value = renderer_clone
-                //     .borrow()
-                //     .read_pixel_from_texture(x_coord, y_coord)
-                //     .await;
-                // log::info!(
-                //     "Depth pixel at ({}, {}): {:?}",
-                //     x_coord,
-                //     y_coord,
-                //     pixel_value
-                // );
-            }
-            WindowEvent::PointerWheel(msg) => {
-                let mut r = renderer.borrow_mut();
-                let wheel_msg = WheelMessage {
-                    scale_factor: 1.0,
-                    delta_x: 0.0,
-                    delta_y: msg.delta_y as f64,
-                    delta_z: 0.0,
-                    delta_mode: 1, // DOM_DELTA_LINE
-                    client_x: 0.0,
-                    client_y: 0.0,
-                };
-                r.scene.cam.zoom(&wheel_msg);
-            }
-            WindowEvent::Keyboard(msg) => {
-                log::info!("Key event received: {:?}", msg);
-
-                // Check for 'L' key press
-                if msg.key == "l" || msg.key == "L" {
-                    let renderer_clone = renderer.clone();
-                    spawn_local(async move {
-                        if let Err(e) = Self::show_file_picker_and_load(renderer_clone).await {
-                            log::error!("Failed to load file: {:?}", e);
+            for event in events {
+                match event {
+                    WindowEvent::Sync(SyncWindowEvent::PointerMove(msg)) => {
+                        if let Some(ref mut prev) = coalesced_move {
+                            prev.movement_x += msg.movement_x;
+                            prev.movement_y += msg.movement_y;
+                            prev.client_x = msg.client_x;
+                            prev.client_y = msg.client_y;
+                            prev.offset_x = msg.offset_x;
+                            prev.offset_y = msg.offset_y;
+                            prev.buttons = msg.buttons;
+                        } else {
+                            coalesced_move = Some(msg);
                         }
-                    });
+                    }
+                    other => r.handle_event(renderer, other),
                 }
             }
-            WindowEvent::CameraOrbit(msg) => {
-                let mut r = renderer.borrow_mut();
-                r.scene.cam.orbit(msg.delta_x, msg.delta_y);
+
+            if let Some(msg) = coalesced_move {
+                let evt = WindowEvent::Sync(SyncWindowEvent::PointerMove(msg));
+                r.handle_event(renderer, evt);
             }
-            WindowEvent::CameraZoom(msg) => {
-                let mut r = renderer.borrow_mut();
-                let wheel_msg = WheelMessage {
-                    scale_factor: 1.0,
-                    delta_x: 0.0,
-                    delta_y: msg.delta as f64,
-                    delta_z: 0.0,
-                    delta_mode: 0,
-                    client_x: 0.0,
-                    client_y: 0.0,
-                };
-                r.scene.cam.zoom(&wheel_msg);
+
+            r.render(time);
+        }
+    }
+
+    fn handle_event(&mut self, renderer: &Rc<RefCell<Renderer>>, event: WindowEvent) {
+        match event {
+            WindowEvent::Sync(sync_event) => {
+                match sync_event {
+                    SyncWindowEvent::PointerMove(msg) => {
+                        self.mouse_move(msg);
+                    }
+                    SyncWindowEvent::Resize(msg) => {
+                        self.resize(msg);
+                    }
+                    SyncWindowEvent::PointerClick(msg) => {
+                        let x = (msg.offset_x * msg.scale_factor) as f32;
+                        let y = (msg.offset_y * msg.scale_factor) as f32;
+                        self.scene.frame_metadata.mouse_click = [x, y];
+                        log::info!("clicked");
+                    }
+                    SyncWindowEvent::PointerWheel(msg) => {
+                        let wheel_msg = WheelMessage {
+                            scale_factor: 1.0,
+                            delta_x: 0.0,
+                            delta_y: msg.delta_y as f64,
+                            delta_z: 0.0,
+                            delta_mode: 1, // DOM_DELTA_LINE
+                            client_x: 0.0,
+                            client_y: 0.0,
+                        };
+                        self.scene.cam.zoom(&wheel_msg);
+                    }
+                    SyncWindowEvent::Keyboard(msg) => {
+                        log::info!("Key event received: {:?}", msg);
+
+                        if msg.key == "l" || msg.key == "L" {
+                            Self::handle_async_event(renderer, AsyncWindowEvent::LoadGltf);
+                        }
+                    }
+                    SyncWindowEvent::CameraOrbit(msg) => {
+                        self.scene.cam.orbit(msg.delta_x, msg.delta_y);
+                    }
+                    SyncWindowEvent::CameraZoom(msg) => {
+                        let wheel_msg = WheelMessage {
+                            scale_factor: 1.0,
+                            delta_x: 0.0,
+                            delta_y: msg.delta as f64,
+                            delta_z: 0.0,
+                            delta_mode: 0,
+                            client_x: 0.0,
+                            client_y: 0.0,
+                        };
+                        self.scene.cam.zoom(&wheel_msg);
+                    }
+                    SyncWindowEvent::SceneCommand(cmd) => {
+                        self.apply_scene_command(cmd);
+                    }
+                }
             }
-            WindowEvent::SceneCommand(cmd) => {
-                renderer.borrow_mut().apply_scene_command(cmd);
+            WindowEvent::Async(async_event) => {
+                Self::handle_async_event(renderer, async_event);
             }
         }
     }
@@ -686,78 +705,6 @@ impl Renderer {
         scene.meshes.push(mesh);
     }
 
-    pub fn run(self, events_chan: Receiver<WindowEvent>) {
-        let renderer = Rc::new(RefCell::new(self));
-        let events_chan = Rc::new(events_chan);
-        Self::run_render_loop(renderer, events_chan);
-    }
-
-    fn run_render_loop(renderer: Rc<RefCell<Renderer>>, events_chan: Rc<Receiver<WindowEvent>>) {
-        let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
-            // Drain all queued events, coalescing pointer moves into a single accumulated delta
-            {
-                if renderer.try_borrow_mut().is_ok() {
-                    let mut coalesced_move: Option<MouseMessage> = None;
-                    let mut other_events: Vec<WindowEvent> = Vec::new();
-
-                    // Drain all available events
-                    while let Ok(event) = events_chan.try_recv() {
-                        match event {
-                            WindowEvent::PointerMove(msg) => {
-                                // Coalesce pointer moves: accumulate movement deltas
-                                if let Some(ref mut prev) = coalesced_move {
-                                    prev.movement_x += msg.movement_x;
-                                    prev.movement_y += msg.movement_y;
-                                    // Keep latest position/button state
-                                    prev.client_x = msg.client_x;
-                                    prev.client_y = msg.client_y;
-                                    prev.offset_x = msg.offset_x;
-                                    prev.offset_y = msg.offset_y;
-                                    prev.buttons = msg.buttons;
-                                } else {
-                                    coalesced_move = Some(msg);
-                                }
-                            }
-                            other => other_events.push(other),
-                        }
-                    }
-
-                    // Process coalesced pointer move first (if any)
-                    if let Some(msg) = coalesced_move {
-                        let renderer_clone = renderer.clone();
-                        spawn_local(async move {
-                            Self::handle_event(renderer_clone, WindowEvent::PointerMove(msg)).await;
-                        });
-                    }
-
-                    // Process other events
-                    for event in other_events {
-                        let renderer_clone = renderer.clone();
-                        spawn_local(async move {
-                            Self::handle_event(renderer_clone, event).await;
-                        });
-                    }
-                }
-            }
-
-            {
-                if let Ok(mut r) = renderer.try_borrow_mut() {
-                    r.render(time);
-                }
-            }
-
-            Self::run_render_loop(renderer.clone(), events_chan.clone());
-        });
-
-        let global = js_sys::global().unchecked_into::<DedicatedWorkerGlobalScope>();
-
-        global
-            .request_animation_frame(render_frame.as_ref().unchecked_ref())
-            .unwrap();
-
-        render_frame.forget();
-    }
-
     fn resize(&mut self, msg: ResizeMessage) {
         let new_width = (msg.width * msg.scale_factor) as u32;
         let new_height = (msg.height * msg.scale_factor) as u32;
@@ -789,6 +736,21 @@ impl Renderer {
             let delta_x = (msg.movement_x * msg.scale_factor) as f32;
             let delta_y = (msg.movement_y * msg.scale_factor) as f32;
             self.scene.cam.orbit(delta_x, delta_y);
+        }
+    }
+
+    fn handle_async_event(renderer: &Rc<RefCell<Renderer>>, event: AsyncWindowEvent) {
+        let sender = renderer.borrow().sender.clone();
+        match event {
+            AsyncWindowEvent::LoadGltf => {
+                let r = renderer.clone();
+                crate::task::execute_async_event(sender, async move {
+                    if let Err(e) = Renderer::load_assets_async(r).await {
+                        log::error!("Failed to load file: {:?}", e);
+                    }
+                    vec![]
+                });
+            }
         }
     }
 
@@ -846,12 +808,6 @@ impl Renderer {
         }
 
         Ok(())
-    }
-
-    async fn show_file_picker_and_load(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
-        // For now, we'll just call load_assets_async which loads the default model
-        // In a full implementation, we'd modify load_gltf_model to accept the file data
-        Self::load_assets_async(renderer).await
     }
 }
 

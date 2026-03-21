@@ -1,5 +1,10 @@
+use std::sync::mpsc::{Receiver, Sender};
+
 #[cfg(target_arch = "wasm32")]
-use std::sync::mpsc::{self, Sender};
+use std::{cell::RefCell, rc::Rc};
+
+#[cfg(target_arch = "wasm32")]
+use std::sync::mpsc;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::closure::Closure;
@@ -10,15 +15,19 @@ use wasm_bindgen::JsCast;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen_futures::spawn_local;
 #[cfg(target_arch = "wasm32")]
-use web_sys::AddEventListenerOptions;
+use web_sys::{AddEventListenerOptions, DedicatedWorkerGlobalScope};
 
-#[cfg(target_arch = "wasm32")]
-use crate::message::{MeshData, OrbitMessage, SceneCommand, WindowEvent, ZoomMessage};
-#[cfg(target_arch = "wasm32")]
+use crate::{
+    message::{MeshData, OrbitMessage, SceneCommand, SyncWindowEvent, WindowEvent, ZoomMessage},
+    renderer::Renderer,
+};
+
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web;
 #[cfg(target_arch = "wasm32")]
-use crate::platform::web::worker::MainWorker;
+use crate::platform::web::worker::{wait_for_canvas_transfer, MainWorker};
+#[cfg(target_arch = "wasm32")]
+use crate::renderer::surface::SurfaceContext;
 
 #[cfg(target_arch = "wasm32")]
 fn init_platform() {
@@ -65,11 +74,11 @@ fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventListe
         let height = window.inner_height().ok().unwrap().as_f64().unwrap();
 
         resize_worker_chan
-            .send(WindowEvent::Resize(ResizeMessage {
+            .send(WindowEvent::Sync(SyncWindowEvent::Resize(ResizeMessage {
                 width,
                 height,
                 scale_factor: window.device_pixel_ratio(),
-            }))
+            })))
             .unwrap();
     });
 
@@ -84,9 +93,11 @@ fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventListe
             }
             let mouse_event_data = MouseMessage::from_evt(event.clone());
 
-            let mut event_data = WindowEvent::PointerMove(mouse_event_data.clone());
+            let mut event_data =
+                WindowEvent::Sync(SyncWindowEvent::PointerMove(mouse_event_data.clone()));
             if event.type_() == "click" {
-                event_data = WindowEvent::PointerClick(mouse_event_data.clone());
+                event_data =
+                    WindowEvent::Sync(SyncWindowEvent::PointerClick(mouse_event_data.clone()));
             }
 
             mousemove_worker_chan.clone().send(event_data).unwrap();
@@ -121,7 +132,7 @@ fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventListe
             let wheel_event_data = WheelMessage::from_evt(event);
 
             wheel_worker_chan
-                .send(WindowEvent::PointerWheel(wheel_event_data))
+                .send(WindowEvent::Sync(SyncWindowEvent::PointerWheel(wheel_event_data)))
                 .unwrap();
         });
 
@@ -145,7 +156,7 @@ fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventListe
             let keyboard_event_data = KeyboardMessage::from_evt(event);
 
             keyboard_worker_chan
-                .send(WindowEvent::Keyboard(keyboard_event_data))
+                .send(WindowEvent::Sync(SyncWindowEvent::Keyboard(keyboard_event_data)))
                 .unwrap();
         });
 
@@ -162,12 +173,42 @@ fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventListe
 }
 
 pub struct App {
-    worker: MainWorker,
     sender: Sender<WindowEvent>,
+    #[cfg(target_arch = "wasm32")]
+    worker: MainWorker,
+    #[cfg(target_arch = "wasm32")]
     _event_listeners: EventListeners,
 }
 
 impl App {
+    #[cfg(target_arch = "wasm32")]
+    fn start_loop(renderer: Renderer, events_chan: Receiver<WindowEvent>) {
+        let renderer = Rc::new(RefCell::new(renderer));
+        let events_chan = Rc::new(events_chan);
+
+        Self::request_animation_frame(renderer, events_chan);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn request_animation_frame(
+        renderer: Rc<RefCell<Renderer>>,
+        events_chan: Rc<Receiver<WindowEvent>>,
+    ) {
+        let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
+            Renderer::tick(&renderer, events_chan.as_ref(), time);
+
+            Self::request_animation_frame(renderer.clone(), events_chan.clone());
+        });
+
+        let global = js_sys::global().unchecked_into::<DedicatedWorkerGlobalScope>();
+
+        global
+            .request_animation_frame(render_frame.as_ref().unchecked_ref())
+            .unwrap();
+
+        render_frame.forget();
+    }
+
     #[cfg(target_arch = "wasm32")]
     /// Initialize the web worker, canvas ownership, and event listeners.
     pub fn new(worker_name: &str, canvas_selector: &str) -> Result<Self, JsValue> {
@@ -176,9 +217,13 @@ impl App {
         let (sender, receiver) = mpsc::channel::<WindowEvent>();
 
         let canvas = web::get_canvas_element(canvas_selector);
+        let task_sender = sender.clone();
         let worker = MainWorker::spawn(worker_name, 1, move || {
             spawn_local(async move {
-                MainWorker::run_render_loop(receiver).await;
+                let canvas = wait_for_canvas_transfer().await;
+                let surface_context = SurfaceContext::from_offscreen_canvas(canvas);
+                let renderer = Renderer::new(surface_context, task_sender).await;
+                Self::start_loop(renderer, receiver);
             });
         })?;
 
@@ -197,41 +242,51 @@ impl App {
     pub fn add_mesh(&self, mesh: MeshData) {
         let _ = self
             .sender
-            .send(WindowEvent::SceneCommand(SceneCommand::AddMesh(mesh)));
+            .send(WindowEvent::Sync(SyncWindowEvent::SceneCommand(
+                SceneCommand::AddMesh(mesh),
+            )));
     }
 
     /// Clear all meshes from the scene.
     pub fn clear_scene(&self) {
         let _ = self
             .sender
-            .send(WindowEvent::SceneCommand(SceneCommand::Clear));
+            .send(WindowEvent::Sync(SyncWindowEvent::SceneCommand(
+                SceneCommand::Clear,
+            )));
     }
 
     /// Set the camera position and look-at target.
     pub fn set_camera_look_at(&self, eye: [f32; 3], target: [f32; 3]) {
         let _ = self
             .sender
-            .send(WindowEvent::SceneCommand(SceneCommand::SetCameraLookAt {
-                eye,
-                target,
-            }));
+            .send(WindowEvent::Sync(SyncWindowEvent::SceneCommand(
+                SceneCommand::SetCameraLookAt { eye, target },
+            )));
     }
 
     /// Orbit the camera by the given pixel deltas.
     pub fn orbit_camera(&self, dx: f32, dy: f32) {
-        let _ = self.sender.send(WindowEvent::CameraOrbit(OrbitMessage {
-            delta_x: dx,
-            delta_y: dy,
-        }));
+        let _ = self
+            .sender
+            .send(WindowEvent::Sync(SyncWindowEvent::CameraOrbit(
+                OrbitMessage {
+                    delta_x: dx,
+                    delta_y: dy,
+                },
+            )));
     }
 
     /// Zoom the camera by the given delta (negative = zoom in, positive = zoom out).
     pub fn zoom_camera(&self, delta: f32) {
         let _ = self
             .sender
-            .send(WindowEvent::CameraZoom(ZoomMessage { delta }));
+            .send(WindowEvent::Sync(SyncWindowEvent::CameraZoom(
+                ZoomMessage { delta },
+            )));
     }
 
+    #[cfg(target_arch = "wasm32")]
     /// Access the spawned worker reference.
     pub fn worker(&self) -> &MainWorker {
         &self.worker
