@@ -37,6 +37,15 @@ test.describe("WASM App", () => {
     await page.goto("/");
     await waitForApp(page);
 
+    await expect
+      .poll(async () =>
+        page.evaluate(() => ({
+          boxCount: (window as any).app.box_count(),
+          meshCount: (window as any).app.mesh_count(),
+        })),
+      )
+      .toEqual({ boxCount: 15, meshCount: 16 });
+
     // Canvas exists with non-zero dimensions
     const canvas = page.locator("#canvas0");
     await expect(canvas).toBeVisible();

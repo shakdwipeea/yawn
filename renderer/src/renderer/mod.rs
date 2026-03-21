@@ -15,10 +15,8 @@ use web_sys::DedicatedWorkerGlobalScope;
 
 use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
-    message::{MouseMessage, ResizeMessage, WheelMessage, WindowEvent},
-    renderer::{
-        surface::{SurfaceContext, WindowDimension},
-    },
+    message::{MeshData, MouseMessage, ResizeMessage, SceneCommand, WheelMessage, WindowEvent},
+    renderer::surface::{SurfaceContext, WindowDimension},
 };
 
 pub mod scene;
@@ -634,7 +632,58 @@ impl Renderer {
                 };
                 r.scene.cam.zoom(&wheel_msg);
             }
+            WindowEvent::SceneCommand(cmd) => {
+                renderer.borrow_mut().apply_scene_command(cmd);
+            }
         }
+    }
+
+    fn apply_scene_command(&mut self, cmd: SceneCommand) {
+        match cmd {
+            SceneCommand::Clear => self.scene.clear_meshes(),
+            SceneCommand::AddMesh(mesh_data) => {
+                self.add_mesh(mesh_data);
+            }
+            SceneCommand::SetCameraLookAt { eye, target } => {
+                self.scene.set_camera_look_at(eye, target);
+            }
+        }
+    }
+
+    fn add_mesh(&mut self, upload: MeshData) {
+        let device = &self.context.device;
+        let surface_format = self.context.surface_config.format;
+        let (scene, resources) = (&mut self.scene, &mut self.resources);
+
+        let pipeline_index = resources.get_or_create_pipeline(
+            device,
+            &upload.pipeline_key,
+            &scene::mesh_vertex_layout(),
+            &upload.shader_source,
+            surface_format,
+        );
+
+        let m = upload.model_matrix;
+        let model_matrix = ultraviolet::Mat4::new(
+            ultraviolet::Vec4::new(m[0], m[1], m[2], m[3]),
+            ultraviolet::Vec4::new(m[4], m[5], m[6], m[7]),
+            ultraviolet::Vec4::new(m[8], m[9], m[10], m[11]),
+            ultraviolet::Vec4::new(m[12], m[13], m[14], m[15]),
+        );
+        let mesh = scene::MeshBuilder::default()
+            .with_vertices(
+                device,
+                resources,
+                &upload.positions,
+                &upload.normals,
+                &upload.uvs,
+            )
+            .with_indices(device, resources, &upload.indices)
+            .with_pipeline(pipeline_index)
+            .with_model_matrix(device, resources, model_matrix)
+            .build();
+
+        scene.meshes.push(mesh);
     }
 
     pub fn run(self, events_chan: Receiver<WindowEvent>) {
@@ -799,9 +848,7 @@ impl Renderer {
         Ok(())
     }
 
-    async fn show_file_picker_and_load(
-        renderer: Rc<RefCell<Renderer>>,
-    ) -> Result<(), ImportError> {
+    async fn show_file_picker_and_load(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
         // For now, we'll just call load_assets_async which loads the default model
         // In a full implementation, we'd modify load_gltf_model to accept the file data
         Self::load_assets_async(renderer).await

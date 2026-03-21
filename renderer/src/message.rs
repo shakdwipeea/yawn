@@ -11,6 +11,25 @@ pub enum WindowEvent {
     Keyboard(KeyboardMessage),
     CameraOrbit(OrbitMessage),
     CameraZoom(ZoomMessage),
+    SceneCommand(SceneCommand),
+}
+
+#[derive(Debug)]
+pub struct MeshData {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
+    pub model_matrix: [f32; 16],
+    pub shader_source: String,
+    pub pipeline_key: String,
+}
+
+#[derive(Debug)]
+pub enum SceneCommand {
+    Clear,
+    AddMesh(MeshData),
+    SetCameraLookAt { eye: [f32; 3], target: [f32; 3] },
 }
 
 // Display for WindowEvent
@@ -24,6 +43,7 @@ impl fmt::Display for WindowEvent {
             WindowEvent::Keyboard(msg) => write!(f, "Keyboard: {:?}", msg),
             WindowEvent::CameraOrbit(msg) => write!(f, "CameraOrbit: {:?}", msg),
             WindowEvent::CameraZoom(msg) => write!(f, "CameraZoom: {:?}", msg),
+            WindowEvent::SceneCommand(msg) => write!(f, "SceneCommand: {:?}", msg),
         }
     }
 }

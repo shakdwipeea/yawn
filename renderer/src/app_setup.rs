@@ -13,7 +13,8 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::AddEventListenerOptions;
 
 #[cfg(target_arch = "wasm32")]
-use crate::message::{OrbitMessage, WindowEvent, ZoomMessage};
+use crate::message::{MeshData, OrbitMessage, SceneCommand, WindowEvent, ZoomMessage};
+#[cfg(target_arch = "wasm32")]
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web;
 #[cfg(target_arch = "wasm32")]
@@ -169,10 +170,7 @@ pub struct App {
 impl App {
     #[cfg(target_arch = "wasm32")]
     /// Initialize the web worker, canvas ownership, and event listeners.
-    pub fn new(
-        worker_name: &str,
-        canvas_selector: &str,
-    ) -> Result<Self, JsValue> {
+    pub fn new(worker_name: &str, canvas_selector: &str) -> Result<Self, JsValue> {
         init_platform();
 
         let (sender, receiver) = mpsc::channel::<WindowEvent>();
@@ -195,9 +193,28 @@ impl App {
         })
     }
 
-    /// Access the worker channel sender for dispatching custom window events.
-    pub fn sender(&self) -> &Sender<WindowEvent> {
-        &self.sender
+    /// Add a mesh to the scene.
+    pub fn add_mesh(&self, mesh: MeshData) {
+        let _ = self
+            .sender
+            .send(WindowEvent::SceneCommand(SceneCommand::AddMesh(mesh)));
+    }
+
+    /// Clear all meshes from the scene.
+    pub fn clear_scene(&self) {
+        let _ = self
+            .sender
+            .send(WindowEvent::SceneCommand(SceneCommand::Clear));
+    }
+
+    /// Set the camera position and look-at target.
+    pub fn set_camera_look_at(&self, eye: [f32; 3], target: [f32; 3]) {
+        let _ = self
+            .sender
+            .send(WindowEvent::SceneCommand(SceneCommand::SetCameraLookAt {
+                eye,
+                target,
+            }));
     }
 
     /// Orbit the camera by the given pixel deltas.

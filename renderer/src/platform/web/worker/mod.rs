@@ -94,9 +94,7 @@ mod imp {
                 .unwrap();
         }
 
-        pub async fn run_render_loop(
-            events_chan: Receiver<WindowEvent>,
-        ) {
+        pub async fn run_render_loop(events_chan: Receiver<WindowEvent>) {
             use crate::renderer::{surface::SurfaceContext, Renderer};
 
             let canvas = wait_for_canvas_transfer().await;
@@ -169,9 +167,7 @@ mod imp {
             panic!("platform::web::worker::transfer_ownership is only available on wasm32");
         }
 
-        pub async fn run_render_loop<T: crate::renderer::scene::Scene + 'static>(
-            _events_chan: Receiver<WindowEvent>,
-        ) {
+        pub async fn run_render_loop(_events_chan: Receiver<WindowEvent>) {
             panic!("platform::web::worker::run_render_loop is only available on wasm32");
         }
     }

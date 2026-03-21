@@ -1,84 +1,74 @@
-use ultraviolet::{Mat4, Vec3};
+use ultraviolet::Mat4;
 use wasm_bindgen::prelude::*;
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use renderer::app_setup::App;
-use renderer::renderer as gpu_renderer;
-use renderer::renderer::scene::{mesh_vertex_layout, Mesh, MeshBuilder, Scene};
+use renderer::message::MeshData;
 
-/// Simple vertex format.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    pos: [f32; 3],
-    color: [f32; 3],
-}
+const SHADER_SOURCE: &str = include_str!("./program.wgsl");
 
-/// Ground plane vertex data (double-sided: 6 vertices for top, 6 for bottom).
-const VERTICES: &[Vertex] = &[
+/// Ground plane vertex positions (double-sided: 6 vertices for top, 6 for bottom).
+const GROUND_POSITIONS: &[[f32; 3]] = &[
     // Top face (visible from above)
-    Vertex {
-        pos: [-5.0, 0.0, -5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [5.0, 0.0, -5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [-5.0, 0.0, 5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [5.0, 0.0, -5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [5.0, 0.0, 5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
-    Vertex {
-        pos: [-5.0, 0.0, 5.0],
-        color: [0.2, 0.8, 0.2], // Green
-    },
+    [-5.0, 0.0, -5.0],
+    [5.0, 0.0, -5.0],
+    [-5.0, 0.0, 5.0],
+    [5.0, 0.0, -5.0],
+    [5.0, 0.0, 5.0],
+    [-5.0, 0.0, 5.0],
     // Bottom face (visible from below)
-    Vertex {
-        pos: [-5.0, 0.0, -5.0],
-        color: [0.15, 0.6, 0.15], // Slightly darker green
-    },
-    Vertex {
-        pos: [5.0, 0.0, -5.0],
-        color: [0.15, 0.6, 0.15],
-    },
-    Vertex {
-        pos: [-5.0, 0.0, 5.0],
-        color: [0.15, 0.6, 0.15],
-    },
-    Vertex {
-        pos: [5.0, 0.0, -5.0],
-        color: [0.15, 0.6, 0.15],
-    },
-    Vertex {
-        pos: [5.0, 0.0, 5.0],
-        color: [0.15, 0.6, 0.15],
-    },
-    Vertex {
-        pos: [-5.0, 0.0, 5.0],
-        color: [0.15, 0.6, 0.15],
-    },
+    [-5.0, 0.0, -5.0],
+    [5.0, 0.0, -5.0],
+    [-5.0, 0.0, 5.0],
+    [5.0, 0.0, -5.0],
+    [5.0, 0.0, 5.0],
+    [-5.0, 0.0, 5.0],
+];
+
+const GROUND_NORMALS: &[[f32; 3]] = &[
+    // Top face normals (upward)
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0],
+    // Bottom face normals (downward)
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+    [0.0, -1.0, 0.0],
+];
+
+const GROUND_UVS: &[[f32; 2]] = &[
+    // Top face UVs
+    [0.0, 0.0],
+    [1.0, 0.0],
+    [0.0, 1.0],
+    [1.0, 0.0],
+    [1.0, 1.0],
+    [0.0, 1.0],
+    // Bottom face UVs
+    [0.0, 0.0],
+    [1.0, 0.0],
+    [0.0, 1.0],
+    [1.0, 0.0],
+    [1.0, 1.0],
+    [0.0, 1.0],
 ];
 
 // Wind the ground plane so the upward-facing side is front-facing (CCW from
 // above) to avoid being culled by the default back-face culling.
 // Bottom face is wound in reverse order (CW from above = CCW from below).
-const INDICES: &[u32] = &[
+const GROUND_INDICES: &[u32] = &[
     0, 2, 1, 3, 5, 4, // Top face
     6, 7, 8, 9, 10, 11, // Bottom face (reversed winding)
 ];
 
 /// Box vertex positions (24 vertices: 4 per face for proper normals).
-/// Each face has its own vertices so normals can be per-face.
 const BOX_POSITIONS: &[[f32; 3]] = &[
     // Front face (Z+)
     [-0.5, -0.5, 0.5],
@@ -112,7 +102,6 @@ const BOX_POSITIONS: &[[f32; 3]] = &[
     [-0.5, 0.5, -0.5],
 ];
 
-/// Box normals (one per vertex, matching BOX_POSITIONS).
 const BOX_NORMALS: &[[f32; 3]] = &[
     // Front face (Z+)
     [0.0, 0.0, 1.0],
@@ -146,7 +135,6 @@ const BOX_NORMALS: &[[f32; 3]] = &[
     [-1.0, 0.0, 0.0],
 ];
 
-/// Box indices (36 indices: 6 faces × 2 triangles × 3 vertices).
 const BOX_INDICES: &[u32] = &[
     0, 1, 2, 2, 3, 0, // Front
     4, 5, 6, 6, 7, 4, // Back
@@ -156,7 +144,6 @@ const BOX_INDICES: &[u32] = &[
     20, 21, 22, 22, 23, 20, // Left
 ];
 
-/// Box UVs (one per vertex).
 const BOX_UVS: &[[f32; 2]] = &[
     // Front face
     [0.0, 1.0],
@@ -190,115 +177,67 @@ const BOX_UVS: &[[f32; 2]] = &[
     [0.0, 0.0],
 ];
 
-fn create_box_mesh(
-    device: &wgpu::Device,
-    resources: &mut gpu_renderer::GpuResources,
-    pipeline_index: usize,
-    position: Vec3,
-    size: f32,
-) -> Mesh {
-    let model_matrix = Mat4::from_translation(position) * Mat4::from_scale(size);
+/// Number of boxes added to the default level-editor scene.
+const DEFAULT_BOX_COUNT: usize = 15;
 
-    MeshBuilder::default()
-        .with_vertices(device, resources, BOX_POSITIONS, BOX_NORMALS, BOX_UVS)
-        .with_indices(device, resources, BOX_INDICES)
-        .with_pipeline(pipeline_index)
-        .with_model_matrix(device, resources, model_matrix)
-        .build()
+/// Total mesh count in the default level-editor scene.
+const DEFAULT_MESH_COUNT: usize = DEFAULT_BOX_COUNT + 1;
+
+fn mat4_to_array(m: Mat4) -> [f32; 16] {
+    let s = m.as_slice();
+    let mut out = [0.0f32; 16];
+    out.copy_from_slice(s);
+    out
 }
 
-fn create_default_scene(
-    scene: &mut Scene,
-    device: &wgpu::Device,
-    resources: &mut gpu_renderer::GpuResources,
-    surface_format: wgpu::TextureFormat,
-) {
-    let positions: Vec<[f32; 3]> = VERTICES.iter().map(|v| v.pos).collect();
-    // Ground plane normals: top face points up (Y+), bottom face points down (Y-)
-    let normals: Vec<[f32; 3]> = vec![
-        // Top face normals (upward)
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 1.0, 0.0],
-        // Bottom face normals (downward)
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-        [0.0, -1.0, 0.0],
-    ];
-    let uvs: &[[f32; 2]] = &[
-        // Top face UVs
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [0.0, 1.0],
-        [1.0, 0.0],
-        [1.0, 1.0],
-        [0.0, 1.0],
-        // Bottom face UVs
-        [0.0, 0.0],
-        [1.0, 0.0],
-        [0.0, 1.0],
-        [1.0, 0.0],
-        [1.0, 1.0],
-        [0.0, 1.0],
-    ];
+fn make_ground_mesh(scale: f32) -> MeshData {
+    MeshData {
+        positions: GROUND_POSITIONS.to_vec(),
+        normals: GROUND_NORMALS.to_vec(),
+        uvs: GROUND_UVS.to_vec(),
+        indices: GROUND_INDICES.to_vec(),
+        model_matrix: mat4_to_array(Mat4::from_scale(scale)),
+        shader_source: SHADER_SOURCE.to_string(),
+        pipeline_key: "level_editor_lit".to_string(),
+    }
+}
 
-    let vertex_layout = mesh_vertex_layout();
+fn make_box_mesh(position: [f32; 3], size: f32) -> MeshData {
+    let model_matrix = Mat4::from_translation(position.into()) * Mat4::from_scale(size);
 
-    let pipeline_index = resources.get_or_create_pipeline(
-        device,
-        "ground_plane",
-        &vertex_layout,
-        include_str!("./program.wgsl"),
-        surface_format,
-    );
+    MeshData {
+        positions: BOX_POSITIONS.to_vec(),
+        normals: BOX_NORMALS.to_vec(),
+        uvs: BOX_UVS.to_vec(),
+        indices: BOX_INDICES.to_vec(),
+        model_matrix: mat4_to_array(model_matrix),
+        shader_source: SHADER_SOURCE.to_string(),
+        pipeline_key: "level_editor_lit".to_string(),
+    }
+}
 
-    let scale_factor = 100.0;
-    let scale_matrix = Mat4::from_scale(scale_factor);
+fn setup_default_scene(app: &App) {
+    // Ground plane
+    app.add_mesh(make_ground_mesh(100.0));
 
-    let mesh = MeshBuilder::default()
-        .with_vertices(device, resources, &positions, &normals, uvs)
-        .with_indices(device, resources, INDICES)
-        .with_pipeline(pipeline_index)
-        .with_model_matrix(device, resources, scale_matrix)
-        .build();
+    // Random boxes
+    let mut rng = SmallRng::seed_from_u64(42);
+    let box_size = 50.0;
 
-    scene.add_mesh(mesh);
-
-    // Add random boxes
-    let mut rng = SmallRng::seed_from_u64(42); // Fixed seed for reproducibility
-    let num_boxes = 15;
-    let box_size = 50.0; // Box size in world units
-
-    for i in 0..num_boxes {
-        // Random position within ground plane bounds
-        // Ground plane is scaled by 100, so -500 to 500 in world units
-        // Keep boxes well within bounds
+    for i in 0..DEFAULT_BOX_COUNT {
         let x = rng.gen_range(-300.0..300.0);
         let z = rng.gen_range(-300.0..300.0);
-        // Y position: half box height places bottom on ground
-        // First half of boxes sit on ground, rest float at random heights
-        let y = if i < num_boxes / 2 {
-            box_size / 2.0 // On ground
+        let y = if i < DEFAULT_BOX_COUNT / 2 {
+            box_size / 2.0
         } else {
-            box_size / 2.0 + rng.gen_range(25.0..150.0) // Floating
+            box_size / 2.0 + rng.gen_range(25.0..150.0)
         };
 
-        let position = Vec3::new(x, y, z);
-        let mesh = create_box_mesh(device, resources, pipeline_index, position, box_size);
-        scene.add_mesh(mesh);
+        app.add_mesh(make_box_mesh([x, y, z], box_size));
     }
 
-    // Position camera appropriately for the scaled scene (100x scale)
-    scene.set_camera_look_at(
-        Vec3::new(0.0, 400.0, 600.0), // Eye position: above and behind
-        Vec3::new(0.0, 0.0, 0.0),     // Look at origin
-    );
+    // Camera
+    app.set_camera_look_at([0.0, 400.0, 600.0], [0.0, 0.0, 0.0]);
 }
 
 /// Handle returned from main() for controlling the application from JS.
@@ -309,23 +248,23 @@ pub struct AppHandle {
 
 #[wasm_bindgen]
 impl AppHandle {
-    /// Orbit the camera by the given pixel deltas.
-    pub fn orbit_camera(&self, dx: f32, dy: f32) {
-        self.app.orbit_camera(dx, dy);
+    /// Return the number of boxes in the default level-editor scene.
+    pub fn box_count(&self) -> usize {
+        DEFAULT_BOX_COUNT
     }
 
-    /// Zoom the camera by the given delta (negative = zoom in, positive = zoom out).
-    pub fn zoom_camera(&self, delta: f32) {
-        self.app.zoom_camera(delta);
+    /// Return the total mesh count in the default level-editor scene.
+    pub fn mesh_count(&self) -> usize {
+        DEFAULT_MESH_COUNT
     }
 }
 
 /// Entrypoint for the level editor - returns handle for JS interaction
 #[wasm_bindgen]
 pub fn start() -> AppHandle {
-    AppHandle {
-        app: App::new("main-worker", "#canvas0").unwrap(),
-    }
+    let app = App::new("main-worker", "#canvas0").unwrap();
+    setup_default_scene(&app);
+    AppHandle { app }
 }
 
 renderer::export_worker_entrypoint!();
