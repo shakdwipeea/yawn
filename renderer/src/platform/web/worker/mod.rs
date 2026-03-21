@@ -94,14 +94,14 @@ mod imp {
                 .unwrap();
         }
 
-        pub async fn run_render_loop<T: crate::renderer::scene::Scene + 'static>(
+        pub async fn run_render_loop(
             events_chan: Receiver<WindowEvent>,
         ) {
             use crate::renderer::{surface::SurfaceContext, Renderer};
 
             let canvas = wait_for_canvas_transfer().await;
             let surface_context = SurfaceContext::from_offscreen_canvas(canvas);
-            let renderer = Renderer::<T>::new(surface_context).await;
+            let renderer = Renderer::new(surface_context).await;
             renderer.run(events_chan);
         }
     }

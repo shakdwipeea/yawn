@@ -296,94 +296,82 @@ impl MeshBuilder<IndexBufferInfo, VertexBufferSet, usize, BufferIndex<ModelMatri
     }
 }
 
-pub trait Scene: Sized {
-    fn setup(renderer_context: &renderer::RendererContext, resources: &mut GpuResources) -> Self;
-    fn bind_groups(&self) -> &[wgpu::BindGroup];
-    fn meshes(&self) -> &[Mesh];
-    fn handle_mouse_click(&mut self, x: f32, y: f32);
-    fn handle_zoom(&mut self, delta_y: f32);
-    fn handle_orbit(&mut self, delta_x: f32, delta_y: f32);
-    fn clear(&mut self);
-    fn add_mesh(&mut self, mesh: Mesh);
-    fn camera_depth_range(&self) -> (f32, f32);
-    fn set_camera_depth_range(&mut self, near: f32, far: f32);
-    fn set_camera_look_at(&mut self, eye: ultraviolet::Vec3, center: ultraviolet::Vec3);
+pub struct Scene {
+    pub uniform_buffers: [wgpu::Buffer; 2],
+    pub bind_groups: [wgpu::BindGroup; 2],
+    pub bind_group_layouts: [wgpu::BindGroupLayout; 2],
+    pub frame_metadata: FrameMetadata,
+    pub cam: Camera,
+    pub meshes: Vec<Mesh>,
+}
 
-    fn frame_metadata_mut(&mut self) -> Option<&mut FrameMetadata> {
-        None
-    }
+impl Scene {
+    pub fn new(renderer_context: &renderer::RendererContext, resources: &mut GpuResources) -> Self {
+        let dimension = ultraviolet::Vec2::new(
+            renderer_context.surface_config.width as f32,
+            renderer_context.surface_config.height as f32,
+        );
 
-    fn camera_mut(&mut self) -> Option<&mut Camera> {
-        None
-    }
+        let mut frame_metadata = FrameMetadata::new(dimension);
+        let camera = Camera::new(dimension.x / dimension.y);
 
-    fn uniform_buffers(&self) -> Option<&[wgpu::Buffer]> {
-        None
-    }
+        frame_metadata.set_camera_position(camera.position());
 
-    fn resize(&mut self, width: f64, height: f64, _scale_factor: f64, queue: &wgpu::Queue) {
-        let fm_copy = if let Some(fm) = self.frame_metadata_mut() {
-            let dimension = ultraviolet::Vec2::new(width as f32, height as f32);
-            fm.update_dimension(dimension);
-            *fm
-        } else {
-            return;
-        };
+        let uniform_resource = frame_metadata.create_uniform_resource(&renderer_context.device);
+        let camera_resource = camera.create_uniform_resource(&renderer_context.device);
 
-        let view_proj_copy = if let Some(cam) = self.camera_mut() {
-            cam.update_aspect_ratio(width as f32 / height as f32);
-            cam.view_proj
-        } else {
-            return;
-        };
+        let bind_group_layouts = [
+            uniform_resource.bind_group_layout,
+            camera_resource.bind_group_layout,
+        ];
 
-        if let Some(buffers) = self.uniform_buffers() {
-            if buffers.len() >= 2 {
-                queue.write_buffer(&buffers[0], 0, bytemuck::cast_slice(&[fm_copy]));
-                queue.write_buffer(&buffers[1], 0, bytemuck::cast_slice(&[view_proj_copy]));
-            }
+        resources.set_bind_group_layouts(&bind_group_layouts);
+
+        Scene {
+            uniform_buffers: [uniform_resource.buffer, camera_resource.buffer],
+            bind_groups: [uniform_resource.bind_group, camera_resource.bind_group],
+            bind_group_layouts,
+            frame_metadata,
+            cam: camera,
+            meshes: Vec::new(),
         }
     }
 
-    fn update(
+    pub fn resize(&mut self, width: f64, height: f64, _scale_factor: f64, queue: &wgpu::Queue) {
+        let dimension = ultraviolet::Vec2::new(width as f32, height as f32);
+        self.frame_metadata.update_dimension(dimension);
+        self.cam.update_aspect_ratio(width as f32 / height as f32);
+
+        queue.write_buffer(
+            &self.uniform_buffers[0],
+            0,
+            bytemuck::cast_slice(&[self.frame_metadata]),
+        );
+        queue.write_buffer(
+            &self.uniform_buffers[1],
+            0,
+            bytemuck::cast_slice(&[self.cam.view_proj]),
+        );
+    }
+
+    pub fn update(
         &mut self,
         renderer_context: &renderer::RendererContext,
         _resources: &mut GpuResources,
     ) {
-        let camera_position = if let Some(cam) = self.camera_mut() {
-            cam.position()
-        } else {
-            return;
-        };
+        let time = (js_sys::Date::now() as f32) * 0.001;
+        self.frame_metadata.time = time;
+        self.frame_metadata.set_camera_position(self.cam.position());
 
-        let fm_copy = if let Some(fm) = self.frame_metadata_mut() {
-            let time = (js_sys::Date::now() as f32) * 0.001;
-            fm.time = time;
-            fm.set_camera_position(camera_position);
-            *fm
-        } else {
-            return;
-        };
-
-        let view_proj_copy = if let Some(cam) = self.camera_mut() {
-            cam.view_proj
-        } else {
-            return;
-        };
-
-        if let Some(buffers) = self.uniform_buffers() {
-            if buffers.len() >= 2 {
-                renderer_context.queue.write_buffer(
-                    &buffers[0],
-                    0,
-                    bytemuck::cast_slice(&[fm_copy]),
-                );
-                renderer_context.queue.write_buffer(
-                    &buffers[1],
-                    0,
-                    bytemuck::cast_slice(&[view_proj_copy]),
-                );
-            }
-        }
+        renderer_context.queue.write_buffer(
+            &self.uniform_buffers[0],
+            0,
+            bytemuck::cast_slice(&[self.frame_metadata]),
+        );
+        renderer_context.queue.write_buffer(
+            &self.uniform_buffers[1],
+            0,
+            bytemuck::cast_slice(&[self.cam.view_proj]),
+        );
     }
 }

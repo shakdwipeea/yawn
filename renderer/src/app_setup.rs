@@ -18,8 +18,6 @@ use crate::message::{OrbitMessage, WindowEvent, ZoomMessage};
 use crate::platform::web;
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web::worker::MainWorker;
-#[cfg(target_arch = "wasm32")]
-use crate::renderer::scene::Scene;
 
 #[cfg(target_arch = "wasm32")]
 fn init_platform() {
@@ -171,7 +169,7 @@ pub struct App {
 impl App {
     #[cfg(target_arch = "wasm32")]
     /// Initialize the web worker, canvas ownership, and event listeners.
-    pub fn new<T: Scene + 'static>(
+    pub fn new(
         worker_name: &str,
         canvas_selector: &str,
     ) -> Result<Self, JsValue> {
@@ -182,7 +180,7 @@ impl App {
         let canvas = web::get_canvas_element(canvas_selector);
         let worker = MainWorker::spawn(worker_name, 1, move || {
             spawn_local(async move {
-                MainWorker::run_render_loop::<T>(receiver).await;
+                MainWorker::run_render_loop(receiver).await;
             });
         })?;
 

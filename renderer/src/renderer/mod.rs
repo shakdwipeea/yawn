@@ -17,7 +17,6 @@ use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
     message::{MouseMessage, ResizeMessage, WheelMessage, WindowEvent},
     renderer::{
-        scene::Scene,
         surface::{SurfaceContext, WindowDimension},
     },
 };
@@ -269,14 +268,14 @@ pub struct RendererContext {
     pub depth_view: wgpu::TextureView,
 }
 
-pub struct Renderer<T: scene::Scene> {
+pub struct Renderer {
     surface_size: WindowDimension,
     context: RendererContext,
     resources: GpuResources,
-    scene: T,
+    scene: scene::Scene,
 }
 
-impl<T: Scene + 'static> Renderer<T> {
+impl Renderer {
     fn create_depth_texture(
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
@@ -371,7 +370,7 @@ impl<T: Scene + 'static> Renderer<T> {
             depth_view,
         };
 
-        let scene = T::setup(&context, &mut resources);
+        let scene = scene::Scene::new(&context, &mut resources);
 
         Self {
             surface_size: size,
@@ -422,11 +421,11 @@ impl<T: Scene + 'static> Renderer<T> {
                 timestamp_writes: None,
             });
 
-            for (i, bind_group) in self.scene.bind_groups().iter().enumerate() {
+            for (i, bind_group) in self.scene.bind_groups.iter().enumerate() {
                 render_pass.set_bind_group(i as u32, bind_group, &[]);
             }
 
-            for mesh in self.scene.meshes() {
+            for mesh in self.scene.meshes.iter() {
                 render_pass.set_pipeline(self.resources.get_pipeline_by_index(mesh.pipeline_index));
 
                 render_pass.set_vertex_buffer(
@@ -573,7 +572,7 @@ impl<T: Scene + 'static> Renderer<T> {
                     let mut r = renderer.borrow_mut();
                     let x = (msg.offset_x * msg.scale_factor) as f32;
                     let y = (msg.offset_y * msg.scale_factor) as f32;
-                    r.scene.handle_mouse_click(x, y);
+                    r.scene.frame_metadata.mouse_click = [x, y];
                     log::info!("clicked");
                 }
 
@@ -594,7 +593,16 @@ impl<T: Scene + 'static> Renderer<T> {
             }
             WindowEvent::PointerWheel(msg) => {
                 let mut r = renderer.borrow_mut();
-                r.scene.handle_zoom(msg.delta_y as f32);
+                let wheel_msg = WheelMessage {
+                    scale_factor: 1.0,
+                    delta_x: 0.0,
+                    delta_y: msg.delta_y as f64,
+                    delta_z: 0.0,
+                    delta_mode: 1, // DOM_DELTA_LINE
+                    client_x: 0.0,
+                    client_y: 0.0,
+                };
+                r.scene.cam.zoom(&wheel_msg);
             }
             WindowEvent::Keyboard(msg) => {
                 log::info!("Key event received: {:?}", msg);
@@ -611,7 +619,7 @@ impl<T: Scene + 'static> Renderer<T> {
             }
             WindowEvent::CameraOrbit(msg) => {
                 let mut r = renderer.borrow_mut();
-                r.scene.handle_orbit(msg.delta_x, msg.delta_y);
+                r.scene.cam.orbit(msg.delta_x, msg.delta_y);
             }
             WindowEvent::CameraZoom(msg) => {
                 let mut r = renderer.borrow_mut();
@@ -624,9 +632,7 @@ impl<T: Scene + 'static> Renderer<T> {
                     client_x: 0.0,
                     client_y: 0.0,
                 };
-                if let Some(cam) = r.scene.camera_mut() {
-                    cam.zoom(&wheel_msg);
-                }
+                r.scene.cam.zoom(&wheel_msg);
             }
         }
     }
@@ -637,7 +643,7 @@ impl<T: Scene + 'static> Renderer<T> {
         Self::run_render_loop(renderer, events_chan);
     }
 
-    fn run_render_loop(renderer: Rc<RefCell<Renderer<T>>>, events_chan: Rc<Receiver<WindowEvent>>) {
+    fn run_render_loop(renderer: Rc<RefCell<Renderer>>, events_chan: Rc<Receiver<WindowEvent>>) {
         let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
             // Drain all queued events, coalescing pointer moves into a single accumulated delta
             {
@@ -733,12 +739,12 @@ impl<T: Scene + 'static> Renderer<T> {
         if (msg.buttons & 0x04) != 0 {
             let delta_x = (msg.movement_x * msg.scale_factor) as f32;
             let delta_y = (msg.movement_y * msg.scale_factor) as f32;
-            self.scene.handle_orbit(delta_x, delta_y);
+            self.scene.cam.orbit(delta_x, delta_y);
         }
     }
 
     // currently this replaces everything, will need more sophisticated mechanisms later
-    pub async fn load_assets_async(renderer: Rc<RefCell<Renderer<T>>>) -> Result<(), ImportError> {
+    pub async fn load_assets_async(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
         let (device, surface_format) = {
             let r = renderer.borrow();
             (r.context.device.clone(), r.context.surface_config.format)
@@ -753,7 +759,7 @@ impl<T: Scene + 'static> Renderer<T> {
             load_gltf_model(&device, &mut r.resources, &mut meshes, surface_format).await?;
 
         for mesh in meshes {
-            r.scene.add_mesh(mesh);
+            r.scene.meshes.push(mesh);
         }
 
         // Optional: Adjust camera to frame the newly added model
@@ -783,18 +789,18 @@ impl<T: Scene + 'static> Renderer<T> {
 
             // Only expand the depth range, never shrink it. This prevents
             // loading a small model from clipping objects already in the scene.
-            let (current_near, current_far) = r.scene.camera_depth_range();
+            let (current_near, current_far) = r.scene.cam.depth_range();
             let new_near = near_plane.min(current_near);
             let new_far = far_plane.max(current_far);
-            r.scene.set_camera_depth_range(new_near, new_far);
-            r.scene.set_camera_look_at(center + eye_offset, center);
+            r.scene.cam.set_depth_range(new_near, new_far);
+            r.scene.cam.look_at(center + eye_offset, center);
         }
 
         Ok(())
     }
 
     async fn show_file_picker_and_load(
-        renderer: Rc<RefCell<Renderer<T>>>,
+        renderer: Rc<RefCell<Renderer>>,
     ) -> Result<(), ImportError> {
         // For now, we'll just call load_assets_async which loads the default model
         // In a full implementation, we'd modify load_gltf_model to accept the file data
@@ -802,7 +808,7 @@ impl<T: Scene + 'static> Renderer<T> {
     }
 }
 
-impl<T: scene::Scene> From<BufferIndex<T>> for u32 {
+impl<T> From<BufferIndex<T>> for u32 {
     fn from(value: BufferIndex<T>) -> Self {
         value.index
     }
