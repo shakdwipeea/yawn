@@ -223,7 +223,14 @@ pub async fn load_gltf_model(
         .bytes()
         .await?;
 
-    load_gltf_from_bytes(device, resources, meshes, surface_format, &glb_data, "gltf_standard")
+    load_gltf_from_bytes(
+        device,
+        resources,
+        meshes,
+        surface_format,
+        &glb_data,
+        "gltf_standard",
+    )
 }
 
 pub async fn load_gltf_model_from_url(
@@ -236,5 +243,12 @@ pub async fn load_gltf_model_from_url(
 ) -> Result<Option<ModelBounds>, ImportError> {
     let glb_data = reqwest::get(url).await?.bytes().await?;
 
-    load_gltf_from_bytes(device, resources, meshes, surface_format, &glb_data, pipeline_name)
+    load_gltf_from_bytes(
+        device,
+        resources,
+        meshes,
+        surface_format,
+        &glb_data,
+        pipeline_name,
+    )
 }

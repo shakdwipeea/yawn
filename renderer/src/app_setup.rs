@@ -1,22 +1,35 @@
+#[cfg(target_arch = "wasm32")]
 use std::sync::mpsc::{self, Sender};
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
 
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::closure::Closure;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen_futures::spawn_local;
 #[cfg(target_arch = "wasm32")]
 use web_sys::AddEventListenerOptions;
-#[cfg(target_arch = "wasm32")]
-use wgpu::Error;
 
-use crate::message::WindowEvent;
+#[cfg(target_arch = "wasm32")]
+use crate::message::{OrbitMessage, WindowEvent, ZoomMessage};
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web;
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web::worker::MainWorker;
 #[cfg(target_arch = "wasm32")]
-use wasm_bindgen_futures::spawn_local;
+use crate::renderer::scene::Scene;
 
-/// Helper struct to store event listener closures
+#[cfg(target_arch = "wasm32")]
+fn init_platform() {
+    static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+
+    console_error_panic_hook::set_once();
+    LOGGER_INIT.call_once(|| wasm_logger::init(wasm_logger::Config::default()));
+}
+
+/// Helper struct to store event listener closures.
 #[cfg(target_arch = "wasm32")]
 pub struct EventListeners {
     pub resize_listener: Option<Closure<dyn FnMut()>>,
@@ -39,9 +52,9 @@ impl Default for EventListeners {
     }
 }
 
-/// Setup default window event listeners that forward events to the worker thread
+/// Setup default window event listeners that forward events to the worker thread.
 #[cfg(target_arch = "wasm32")]
-pub fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventListeners, JsValue> {
+fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventListeners, JsValue> {
     let window = web_sys::window().unwrap();
     let resize_worker_chan = worker_chan.clone();
 
@@ -149,21 +162,21 @@ pub fn setup_event_listeners(worker_chan: &Sender<WindowEvent>) -> Result<EventL
     })
 }
 
-/// Runtime resources required to keep a WASM application running.
-#[cfg(target_arch = "wasm32")]
-pub struct WebAppRuntime {
+pub struct App {
     worker: MainWorker,
-    worker_chan: Sender<WindowEvent>,
+    sender: Sender<WindowEvent>,
     _event_listeners: EventListeners,
 }
 
-#[cfg(target_arch = "wasm32")]
-impl WebAppRuntime {
+impl App {
+    #[cfg(target_arch = "wasm32")]
     /// Initialize the web worker, canvas ownership, and event listeners.
-    pub fn new<T: crate::renderer::scene::Scene + 'static>(
+    pub fn new<T: Scene + 'static>(
         worker_name: &str,
         canvas_selector: &str,
     ) -> Result<Self, JsValue> {
+        init_platform();
+
         let (sender, receiver) = mpsc::channel::<WindowEvent>();
 
         let canvas = web::get_canvas_element(canvas_selector);
@@ -179,45 +192,33 @@ impl WebAppRuntime {
 
         Ok(Self {
             worker,
-            worker_chan: sender,
+            sender,
             _event_listeners: event_listeners,
         })
     }
 
     /// Access the worker channel sender for dispatching custom window events.
     pub fn sender(&self) -> &Sender<WindowEvent> {
-        &self.worker_chan
+        &self.sender
+    }
+
+    /// Orbit the camera by the given pixel deltas.
+    pub fn orbit_camera(&self, dx: f32, dy: f32) {
+        let _ = self.sender.send(WindowEvent::CameraOrbit(OrbitMessage {
+            delta_x: dx,
+            delta_y: dy,
+        }));
+    }
+
+    /// Zoom the camera by the given delta (negative = zoom in, positive = zoom out).
+    pub fn zoom_camera(&self, delta: f32) {
+        let _ = self
+            .sender
+            .send(WindowEvent::CameraZoom(ZoomMessage { delta }));
     }
 
     /// Access the spawned worker reference.
     pub fn worker(&self) -> &MainWorker {
         &self.worker
-    }
-}
-
-/// Trait for applications that rely on the renderer's default WASM setup.
-#[cfg(target_arch = "wasm32")]
-pub trait WebApp {
-    type Scene: crate::renderer::scene::Scene + 'static;
-
-    /// Name used for the spawned `MainWorker`.
-    fn worker_name() -> &'static str {
-        "main-worker"
-    }
-
-    /// CSS selector for the canvas element that will be transferred to the worker.
-    fn canvas_selector() -> &'static str {
-        "#canvas0"
-    }
-
-    /// Hook invoked after the runtime has been created.
-    fn on_runtime_initialized(_runtime: &mut WebAppRuntime) {}
-
-    /// Perform the default WASM initialization routine.
-    fn setup_runtime() -> Result<WebAppRuntime, JsValue> {
-        let mut runtime =
-            WebAppRuntime::new::<Self::Scene>(Self::worker_name(), Self::canvas_selector())?;
-        Self::on_runtime_initialized(&mut runtime);
-        Ok(runtime)
     }
 }

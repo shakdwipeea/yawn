@@ -16,10 +16,14 @@ use web_sys::DedicatedWorkerGlobalScope;
 use crate::{
     gltf::{load_gltf_model, ImportError, ModelBounds},
     message::{MouseMessage, ResizeMessage, WheelMessage, WindowEvent},
-    renderer::scene::Scene,
+    renderer::{
+        scene::Scene,
+        surface::{SurfaceContext, WindowDimension},
+    },
 };
 
 pub mod scene;
+pub mod surface;
 
 // Re-export commonly used types
 pub use scene::Mesh;
@@ -266,8 +270,7 @@ pub struct RendererContext {
 }
 
 pub struct Renderer<T: scene::Scene> {
-    canvas: web_sys::OffscreenCanvas,
-    events_chan: Receiver<WindowEvent>,
+    surface_size: WindowDimension,
     context: RendererContext,
     resources: GpuResources,
     scene: T,
@@ -307,16 +310,15 @@ impl<T: Scene + 'static> Renderer<T> {
         self.context.depth_view = view;
     }
 
-    pub async fn new(canvas: web_sys::OffscreenCanvas, events_chan: Receiver<WindowEvent>) -> Self {
+    pub async fn new(surface_context: SurfaceContext) -> Self {
+        let SurfaceContext { target, size } = surface_context;
         let id = wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU,
+            backends: wgpu::Backends::all(),
             ..Default::default()
         };
 
         let instance = wgpu::Instance::new(&id);
-        let surface = instance
-            .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))
-            .unwrap();
+        let surface = instance.create_surface(target).unwrap();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -344,8 +346,8 @@ impl<T: Scene + 'static> Renderer<T> {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_caps.formats[0],
-            width: canvas.clone().width(),
-            height: canvas.clone().height(),
+            width: size.width,
+            height: size.height,
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
@@ -372,8 +374,7 @@ impl<T: Scene + 'static> Renderer<T> {
         let scene = T::setup(&context, &mut resources);
 
         Self {
-            canvas,
-            events_chan,
+            surface_size: size,
             context,
             scene,
             resources,
@@ -630,16 +631,22 @@ impl<T: Scene + 'static> Renderer<T> {
         }
     }
 
-    pub fn run_render_loop(renderer: Rc<RefCell<Renderer<T>>>) {
+    pub fn run(self, events_chan: Receiver<WindowEvent>) {
+        let renderer = Rc::new(RefCell::new(self));
+        let events_chan = Rc::new(events_chan);
+        Self::run_render_loop(renderer, events_chan);
+    }
+
+    fn run_render_loop(renderer: Rc<RefCell<Renderer<T>>>, events_chan: Rc<Receiver<WindowEvent>>) {
         let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
             // Drain all queued events, coalescing pointer moves into a single accumulated delta
             {
-                if let Ok(r) = renderer.try_borrow_mut() {
+                if renderer.try_borrow_mut().is_ok() {
                     let mut coalesced_move: Option<MouseMessage> = None;
                     let mut other_events: Vec<WindowEvent> = Vec::new();
 
                     // Drain all available events
-                    while let Ok(event) = r.events_chan.try_recv() {
+                    while let Ok(event) = events_chan.try_recv() {
                         match event {
                             WindowEvent::PointerMove(msg) => {
                                 // Coalesce pointer moves: accumulate movement deltas
@@ -684,7 +691,7 @@ impl<T: Scene + 'static> Renderer<T> {
                 }
             }
 
-            Self::run_render_loop(renderer.clone());
+            Self::run_render_loop(renderer.clone(), events_chan.clone());
         });
 
         let global = js_sys::global().unchecked_into::<DedicatedWorkerGlobalScope>();
@@ -699,7 +706,8 @@ impl<T: Scene + 'static> Renderer<T> {
     fn resize(&mut self, msg: ResizeMessage) {
         let new_width = (msg.width * msg.scale_factor) as u32;
         let new_height = (msg.height * msg.scale_factor) as u32;
-        if new_width != self.canvas.width() || new_height != self.canvas.height() {
+        if new_width != self.surface_size.width || new_height != self.surface_size.height {
+            self.surface_size = WindowDimension::new(new_width, new_height);
             self.context.surface_config.width = new_width;
             self.context.surface_config.height = new_height;
             self.context
@@ -741,13 +749,8 @@ impl<T: Scene + 'static> Renderer<T> {
         // Don't clear the scene - add to existing content
         let mut r = renderer.borrow_mut();
 
-        let bounds = load_gltf_model(
-            &device,
-            &mut r.resources,
-            &mut meshes,
-            surface_format,
-        )
-        .await?;
+        let bounds =
+            load_gltf_model(&device, &mut r.resources, &mut meshes, surface_format).await?;
 
         for mesh in meshes {
             r.scene.add_mesh(mesh);
@@ -761,8 +764,7 @@ impl<T: Scene + 'static> Renderer<T> {
                 (min[2] + max[2]) * 0.5,
             );
 
-            let extent =
-                ultraviolet::Vec3::new(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
+            let extent = ultraviolet::Vec3::new(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
             let radius =
                 0.5 * (extent.x * extent.x + extent.y * extent.y + extent.z * extent.z).sqrt();
             let radius = radius.max(1.0);

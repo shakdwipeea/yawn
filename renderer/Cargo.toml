@@ -9,6 +9,10 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "sctk_window"
+path = "src/bin/sctk_window.rs"
+
 [features]
 default = []
 atomics = []
@@ -47,6 +51,10 @@ thiserror = { workspace = true }
 ultraviolet = { workspace = true }
 futures = { workspace = true }
 gltf = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+smithay-client-toolkit = "0.20.0"
+wayland-client = "0.31.1"
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
