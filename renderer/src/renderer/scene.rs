@@ -3,7 +3,10 @@ use wgpu::util::DeviceExt;
 
 use crate::{
     camera::Camera,
-    renderer::{self, BufferIndex, GpuResources, Index, ModelMatrix, Normal, Position, UV},
+    renderer::{
+        self, dynamic_texture::dynamic_texture::DynamicTexture, BufferIndex, GpuResources, Index,
+        ModelMatrix, Normal, Position, UV,
+    },
 };
 
 pub struct UniformResource {
@@ -26,6 +29,7 @@ pub struct FrameMetadata {
 
 impl FrameMetadata {
     pub fn new(dimension: ultraviolet::Vec2) -> Self {
+        let _ = DynamicTexture::new(wgpu::TextureFormat::Rgba8Unorm);
         FrameMetadata {
             resolution: dimension.into(),
             mouse_move: [std::f32::MIN, std::f32::MIN],

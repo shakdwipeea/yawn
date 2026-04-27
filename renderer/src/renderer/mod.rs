@@ -1,10 +1,4 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    marker::PhantomData,
-    rc::Rc,
-    sync::mpsc::Receiver,
-};
+use std::{cell::RefCell, collections::HashMap, marker::PhantomData, rc::Rc, sync::mpsc::Receiver};
 
 use futures::channel::oneshot;
 use log::info;
@@ -19,6 +13,7 @@ use crate::{
     renderer::scene::Scene,
 };
 
+pub mod bindless_texture;
 pub mod scene;
 
 // Re-export commonly used types
@@ -613,8 +608,7 @@ impl<T: Scene + 'static> Renderer<T> {
 
     fn drain_events(renderer: &Rc<RefCell<Self>>) -> Result<(), DrainEventError> {
         loop {
-            let event = renderer.try_borrow_mut()?
-                .events_chan.try_recv()?;
+            let event = renderer.try_borrow_mut()?.events_chan.try_recv()?;
 
             let renderer_clone = renderer.clone();
             spawn_local(async move {
