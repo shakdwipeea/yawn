@@ -3,7 +3,21 @@ use std::f32::consts::PI;
 use ultraviolet::{projection, Bivec3, Mat4, Rotor3, Vec3};
 use wgpu::util::DeviceExt;
 
-use crate::{message::WheelMessage, renderer::scene::UniformResource};
+use crate::{
+    events::WheelMessage,
+    renderer::{scene::UniformResource, CommandContext, SyncCommand},
+};
+
+/// Camera commands that flow through the renderer's event loop.
+///
+/// Keeping camera control as standalone command values lets applications
+/// compose them directly without wrapping them in a top-level enum.
+#[derive(Debug, Clone)]
+pub enum CameraCommand {
+    Orbit { delta_x: f32, delta_y: f32 },
+    Zoom { delta: f32 },
+    LookAt { eye: [f32; 3], target: [f32; 3] },
+}
 
 const MIN_DISTANCE: f32 = 0.1;
 const MAX_PITCH: f32 = PI / 2.0 - 0.01;
@@ -227,6 +241,33 @@ impl Camera {
             buffer,
             bind_group,
             bind_group_layout,
+        }
+    }
+}
+
+impl SyncCommand for CameraCommand {
+    fn run(self: Box<Self>, cx: &mut CommandContext<'_>) {
+        match *self {
+            CameraCommand::Orbit { delta_x, delta_y } => {
+                cx.scene.cam.orbit(delta_x, delta_y);
+            }
+            CameraCommand::Zoom { delta } => {
+                // Route programmatic zoom through the same wheel-based path so
+                // delta normalization stays consistent with browser input.
+                let wheel_msg = WheelMessage {
+                    scale_factor: 1.0,
+                    delta_x: 0.0,
+                    delta_y: delta as f64,
+                    delta_z: 0.0,
+                    delta_mode: 0,
+                    client_x: 0.0,
+                    client_y: 0.0,
+                };
+                cx.scene.cam.zoom(&wheel_msg);
+            }
+            CameraCommand::LookAt { eye, target } => {
+                cx.scene.cam.look_at(Vec3::from(eye), Vec3::from(target));
+            }
         }
     }
 }

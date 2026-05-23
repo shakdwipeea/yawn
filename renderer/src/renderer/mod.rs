@@ -1,29 +1,93 @@
-use std::{collections::HashMap, marker::PhantomData, sync::mpsc::Sender};
-
-#[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
+use std::{collections::HashMap, marker::PhantomData};
 
 use futures::channel::oneshot;
 use log::info;
 use ultraviolet::Vec4;
 
-use crate::gltf::{load_gltf_model, ImportError, ModelBounds};
-
 use crate::{
-    message::{
-        AsyncWindowEvent, MeshData, MouseMessage, ResizeMessage, SceneCommand, SyncWindowEvent,
-        WheelMessage, WindowEvent,
-    },
+    events::MeshData,
     renderer::surface::{SurfaceContext, WindowDimension},
 };
 
+mod event_loop;
 pub mod scene;
 pub mod surface;
 
 // Re-export commonly used types
 pub use scene::Mesh;
 
+/// Boxed command objects run on the renderer thread with just the state they
+/// need. Async work lives outside this trait and can feed results back through
+/// [`crate::app::App::spawn_async`].
+pub trait SyncCommand: std::fmt::Debug + Send + 'static {
+    /// Execute the command against the renderer state exposed via
+    /// [`CommandContext`]. Using `self: Box<Self>` keeps the trait object-safe
+    /// without forcing commands into a shared enum.
+    fn run(self: Box<Self>, cx: &mut CommandContext<'_>);
+}
+
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// Narrow command surface exposed to boxed sync commands.
+///
+/// Commands often need scene state, GPU uploads, and immutable renderer
+/// context, but they should not own the full renderer object. This keeps
+/// command implementations composable without reintroducing an app-wide enum.
+pub struct CommandContext<'a> {
+    pub scene: &'a mut scene::Scene,
+    pub resources: &'a mut GpuResources,
+    pub context: &'a RendererContext,
+}
+
+impl<'a> CommandContext<'a> {
+    pub fn new(
+        scene: &'a mut scene::Scene,
+        resources: &'a mut GpuResources,
+        context: &'a RendererContext,
+    ) -> Self {
+        Self {
+            scene,
+            resources,
+            context,
+        }
+    }
+
+    /// Shared mesh upload path used by built-in and app-defined commands.
+    pub fn add_mesh(&mut self, upload: MeshData) {
+        let device = &self.context.device;
+        let surface_format = self.context.surface_config.format;
+
+        let pipeline_index = self.resources.get_or_create_pipeline(
+            device,
+            &upload.pipeline_key,
+            &scene::mesh_vertex_layout(),
+            &upload.shader_source,
+            surface_format,
+        );
+
+        let m = upload.model_matrix;
+        let model_matrix = ultraviolet::Mat4::new(
+            ultraviolet::Vec4::new(m[0], m[1], m[2], m[3]),
+            ultraviolet::Vec4::new(m[4], m[5], m[6], m[7]),
+            ultraviolet::Vec4::new(m[8], m[9], m[10], m[11]),
+            ultraviolet::Vec4::new(m[12], m[13], m[14], m[15]),
+        );
+        let mesh = scene::MeshBuilder::default()
+            .with_vertices(
+                device,
+                self.resources,
+                &upload.positions,
+                &upload.normals,
+                &upload.uvs,
+            )
+            .with_indices(device, self.resources, &upload.indices)
+            .with_pipeline(pipeline_index)
+            .with_model_matrix(device, self.resources, model_matrix)
+            .build();
+
+        self.scene.meshes.push(mesh);
+    }
+}
 
 pub struct GpuResources {
     // Core resources
@@ -266,10 +330,9 @@ pub struct RendererContext {
 
 pub struct Renderer {
     surface_size: WindowDimension,
-    context: RendererContext,
-    resources: GpuResources,
-    scene: scene::Scene,
-    sender: Sender<WindowEvent>,
+    pub context: RendererContext,
+    pub resources: GpuResources,
+    pub scene: scene::Scene,
 }
 
 impl Renderer {
@@ -306,7 +369,7 @@ impl Renderer {
         self.context.depth_view = view;
     }
 
-    pub async fn new(surface_context: SurfaceContext, sender: Sender<WindowEvent>) -> Self {
+    pub async fn new(surface_context: SurfaceContext) -> Self {
         let SurfaceContext { target, size } = surface_context;
         let id = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -374,7 +437,6 @@ impl Renderer {
             context,
             scene,
             resources,
-            sender,
         }
     }
 
@@ -553,261 +615,6 @@ impl Renderer {
         buffer.unmap();
 
         Vec4::new(depth_value, 0.0, 0.0, 0.0)
-    }
-
-    pub fn tick(
-        renderer: &Rc<RefCell<Renderer>>,
-        events_chan: &std::sync::mpsc::Receiver<WindowEvent>,
-        time: f32,
-    ) {
-        if let Ok(mut r) = renderer.try_borrow_mut() {
-            let mut events = Vec::new();
-            while let Ok(event) = events_chan.try_recv() {
-                events.push(event);
-            }
-
-            let mut coalesced_move: Option<MouseMessage> = None;
-
-            for event in events {
-                match event {
-                    WindowEvent::Sync(SyncWindowEvent::PointerMove(msg)) => {
-                        if let Some(ref mut prev) = coalesced_move {
-                            prev.movement_x += msg.movement_x;
-                            prev.movement_y += msg.movement_y;
-                            prev.client_x = msg.client_x;
-                            prev.client_y = msg.client_y;
-                            prev.offset_x = msg.offset_x;
-                            prev.offset_y = msg.offset_y;
-                            prev.buttons = msg.buttons;
-                        } else {
-                            coalesced_move = Some(msg);
-                        }
-                    }
-                    other => r.handle_event(renderer, other),
-                }
-            }
-
-            if let Some(msg) = coalesced_move {
-                let evt = WindowEvent::Sync(SyncWindowEvent::PointerMove(msg));
-                r.handle_event(renderer, evt);
-            }
-
-            r.render(time);
-        }
-    }
-
-    fn handle_event(&mut self, renderer: &Rc<RefCell<Renderer>>, event: WindowEvent) {
-        match event {
-            WindowEvent::Sync(sync_event) => {
-                match sync_event {
-                    SyncWindowEvent::PointerMove(msg) => {
-                        self.mouse_move(msg);
-                    }
-                    SyncWindowEvent::Resize(msg) => {
-                        self.resize(msg);
-                    }
-                    SyncWindowEvent::PointerClick(msg) => {
-                        let x = (msg.offset_x * msg.scale_factor) as f32;
-                        let y = (msg.offset_y * msg.scale_factor) as f32;
-                        self.scene.frame_metadata.mouse_click = [x, y];
-                        log::info!("clicked");
-                    }
-                    SyncWindowEvent::PointerWheel(msg) => {
-                        let wheel_msg = WheelMessage {
-                            scale_factor: 1.0,
-                            delta_x: 0.0,
-                            delta_y: msg.delta_y as f64,
-                            delta_z: 0.0,
-                            delta_mode: 1, // DOM_DELTA_LINE
-                            client_x: 0.0,
-                            client_y: 0.0,
-                        };
-                        self.scene.cam.zoom(&wheel_msg);
-                    }
-                    SyncWindowEvent::Keyboard(msg) => {
-                        log::info!("Key event received: {:?}", msg);
-
-                        if msg.key == "l" || msg.key == "L" {
-                            Self::handle_async_event(renderer, AsyncWindowEvent::LoadGltf);
-                        }
-                    }
-                    SyncWindowEvent::CameraOrbit(msg) => {
-                        self.scene.cam.orbit(msg.delta_x, msg.delta_y);
-                    }
-                    SyncWindowEvent::CameraZoom(msg) => {
-                        let wheel_msg = WheelMessage {
-                            scale_factor: 1.0,
-                            delta_x: 0.0,
-                            delta_y: msg.delta as f64,
-                            delta_z: 0.0,
-                            delta_mode: 0,
-                            client_x: 0.0,
-                            client_y: 0.0,
-                        };
-                        self.scene.cam.zoom(&wheel_msg);
-                    }
-                    SyncWindowEvent::SceneCommand(cmd) => {
-                        self.apply_scene_command(cmd);
-                    }
-                }
-            }
-            WindowEvent::Async(async_event) => {
-                Self::handle_async_event(renderer, async_event);
-            }
-        }
-    }
-
-    fn apply_scene_command(&mut self, cmd: SceneCommand) {
-        match cmd {
-            SceneCommand::Clear => self.scene.clear_meshes(),
-            SceneCommand::AddMesh(mesh_data) => {
-                self.add_mesh(mesh_data);
-            }
-            SceneCommand::SetCameraLookAt { eye, target } => {
-                self.scene.set_camera_look_at(eye, target);
-            }
-        }
-    }
-
-    fn add_mesh(&mut self, upload: MeshData) {
-        let device = &self.context.device;
-        let surface_format = self.context.surface_config.format;
-        let (scene, resources) = (&mut self.scene, &mut self.resources);
-
-        let pipeline_index = resources.get_or_create_pipeline(
-            device,
-            &upload.pipeline_key,
-            &scene::mesh_vertex_layout(),
-            &upload.shader_source,
-            surface_format,
-        );
-
-        let m = upload.model_matrix;
-        let model_matrix = ultraviolet::Mat4::new(
-            ultraviolet::Vec4::new(m[0], m[1], m[2], m[3]),
-            ultraviolet::Vec4::new(m[4], m[5], m[6], m[7]),
-            ultraviolet::Vec4::new(m[8], m[9], m[10], m[11]),
-            ultraviolet::Vec4::new(m[12], m[13], m[14], m[15]),
-        );
-        let mesh = scene::MeshBuilder::default()
-            .with_vertices(
-                device,
-                resources,
-                &upload.positions,
-                &upload.normals,
-                &upload.uvs,
-            )
-            .with_indices(device, resources, &upload.indices)
-            .with_pipeline(pipeline_index)
-            .with_model_matrix(device, resources, model_matrix)
-            .build();
-
-        scene.meshes.push(mesh);
-    }
-
-    fn resize(&mut self, msg: ResizeMessage) {
-        let new_width = (msg.width * msg.scale_factor) as u32;
-        let new_height = (msg.height * msg.scale_factor) as u32;
-        if new_width != self.surface_size.width || new_height != self.surface_size.height {
-            self.surface_size = WindowDimension::new(new_width, new_height);
-            self.context.surface_config.width = new_width;
-            self.context.surface_config.height = new_height;
-            self.context
-                .surface
-                .configure(&self.context.device, &self.context.surface_config);
-            self.recreate_depth_texture();
-
-            self.scene.resize(
-                new_width as f64,
-                new_height as f64,
-                msg.scale_factor,
-                &self.context.queue,
-            );
-
-            info!(
-                "Resized: ({}, {}), scale: {}",
-                new_width, new_height, msg.scale_factor
-            );
-        }
-    }
-
-    pub fn mouse_move(&mut self, msg: MouseMessage) {
-        if (msg.buttons & 0x04) != 0 {
-            let delta_x = (msg.movement_x * msg.scale_factor) as f32;
-            let delta_y = (msg.movement_y * msg.scale_factor) as f32;
-            self.scene.cam.orbit(delta_x, delta_y);
-        }
-    }
-
-    fn handle_async_event(renderer: &Rc<RefCell<Renderer>>, event: AsyncWindowEvent) {
-        let sender = renderer.borrow().sender.clone();
-        match event {
-            AsyncWindowEvent::LoadGltf => {
-                let r = renderer.clone();
-                crate::task::execute_async_event(sender, async move {
-                    if let Err(e) = Renderer::load_assets_async(r).await {
-                        log::error!("Failed to load file: {:?}", e);
-                    }
-                    vec![]
-                });
-            }
-        }
-    }
-
-    // currently this replaces everything, will need more sophisticated mechanisms later
-    pub async fn load_assets_async(renderer: Rc<RefCell<Renderer>>) -> Result<(), ImportError> {
-        let (device, surface_format) = {
-            let r = renderer.borrow();
-            (r.context.device.clone(), r.context.surface_config.format)
-        };
-
-        let mut meshes = Vec::new();
-
-        // Don't clear the scene - add to existing content
-        let mut r = renderer.borrow_mut();
-
-        let bounds =
-            load_gltf_model(&device, &mut r.resources, &mut meshes, surface_format).await?;
-
-        for mesh in meshes {
-            r.scene.meshes.push(mesh);
-        }
-
-        // Optional: Adjust camera to frame the newly added model
-        if let Some(ModelBounds { min, max }) = bounds {
-            let center = ultraviolet::Vec3::new(
-                (min[0] + max[0]) * 0.5,
-                (min[1] + max[1]) * 0.5,
-                (min[2] + max[2]) * 0.5,
-            );
-
-            let extent = ultraviolet::Vec3::new(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
-            let radius =
-                0.5 * (extent.x * extent.x + extent.y * extent.y + extent.z * extent.z).sqrt();
-            let radius = radius.max(1.0);
-
-            // set the camera position after load, so we are not disoriented
-            let eye_offset = ultraviolet::Vec3::new(0.0, radius * 0.05, radius * 0.25);
-
-            // Keep the near plane proportional to the model size to avoid
-            // extreme depth ranges when loading very large assets
-            let near_plane = (radius * 0.001).max(0.1);
-
-            // The far plane must be far enough to cover the entire model.
-            // Using a fixed upper clamp caused large models to be clipped
-            // completely; relying on the model radius instead.
-            let far_plane = (radius * 4.0).max(near_plane + 1.0);
-
-            // Only expand the depth range, never shrink it. This prevents
-            // loading a small model from clipping objects already in the scene.
-            let (current_near, current_far) = r.scene.cam.depth_range();
-            let new_near = near_plane.min(current_near);
-            let new_far = far_plane.max(current_far);
-            r.scene.cam.set_depth_range(new_near, new_far);
-            r.scene.cam.look_at(center + eye_offset, center);
-        }
-
-        Ok(())
     }
 }
 

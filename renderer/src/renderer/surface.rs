@@ -1,3 +1,11 @@
+#[cfg(target_os = "linux")]
+use smithay_client_toolkit::shell::xdg::window::Window;
+#[cfg(target_os = "linux")]
+use wayland_client::Connection;
+
+#[cfg(target_os = "linux")]
+use crate::platform::native::wayland::WaylandWindowHandleSource;
+
 /// Physical window or surface dimensions used for swapchain configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WindowDimension {
@@ -34,5 +42,14 @@ impl SurfaceContext {
             wgpu::SurfaceTarget::OffscreenCanvas(canvas),
             WindowDimension::new(width, height),
         )
+    }
+
+    /// Create a surface context for an SCTK Wayland toplevel.
+    #[cfg(target_os = "linux")]
+    pub fn from_wayland_window(conn: Connection, window: Window, size: WindowDimension) -> Self {
+        // We move the connection and window into the surface target so wgpu can
+        // keep borrowing valid raw Wayland handles for as long as the surface
+        // exists.
+        Self::new(WaylandWindowHandleSource::new(conn, window).into(), size)
     }
 }

@@ -1,14 +1,23 @@
 use ultraviolet::Mat4;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
-use renderer::app_setup::App;
-use renderer::message::MeshData;
+use renderer::app::App;
+#[cfg(target_arch = "wasm32")]
+use renderer::app_runtime::WebAppRuntime;
+use renderer::events::MeshData;
+use renderer::gltf::LoadGltfCommand;
 
+/// Shader shared by all procedural meshes (ground, boxes). GLTF models use
+/// their own shader embedded in the glTF module.
 const SHADER_SOURCE: &str = include_str!("./program.wgsl");
 
 /// Ground plane vertex positions (double-sided: 6 vertices for top, 6 for bottom).
+///
+/// Duplicated for top and bottom faces so each side gets its own normal
+/// direction, allowing correct lighting from both above and below.
 const GROUND_POSITIONS: &[[f32; 3]] = &[
     // Top face (visible from above)
     [-5.0, 0.0, -5.0],
@@ -60,15 +69,18 @@ const GROUND_UVS: &[[f32; 2]] = &[
     [0.0, 1.0],
 ];
 
-// Wind the ground plane so the upward-facing side is front-facing (CCW from
-// above) to avoid being culled by the default back-face culling.
-// Bottom face is wound in reverse order (CW from above = CCW from below).
+/// Ground indices with deliberate winding order:
+/// - Top face is wound CCW when viewed from above → front-facing for back-face culling.
+/// - Bottom face is wound CW from above (= CCW from below) so it also survives culling.
 const GROUND_INDICES: &[u32] = &[
-    0, 2, 1, 3, 5, 4, // Top face
-    6, 7, 8, 9, 10, 11, // Bottom face (reversed winding)
+    0, 2, 1, 3, 5, 4, // Top face (CCW from above)
+    6, 7, 8, 9, 10, 11, // Bottom face (CCW from below)
 ];
 
 /// Box vertex positions (24 vertices: 4 per face for proper normals).
+///
+/// Each face has its own 4 vertices (rather than sharing corners) so that
+/// every vertex carries the correct face normal for flat shading.
 const BOX_POSITIONS: &[[f32; 3]] = &[
     // Front face (Z+)
     [-0.5, -0.5, 0.5],
@@ -180,9 +192,11 @@ const BOX_UVS: &[[f32; 2]] = &[
 /// Number of boxes added to the default level-editor scene.
 const DEFAULT_BOX_COUNT: usize = 15;
 
-/// Total mesh count in the default level-editor scene.
+/// Total mesh count: boxes + 1 ground plane. Exposed via `AppHandle` so the
+/// JS side (and tests) can assert the scene was populated correctly.
 const DEFAULT_MESH_COUNT: usize = DEFAULT_BOX_COUNT + 1;
 
+/// Flatten an ultraviolet `Mat4` into `[f32; 16]` for GPU uniform upload.
 fn mat4_to_array(m: Mat4) -> [f32; 16] {
     let s = m.as_slice();
     let mut out = [0.0f32; 16];
@@ -190,6 +204,8 @@ fn mat4_to_array(m: Mat4) -> [f32; 16] {
     out
 }
 
+/// Build a ground-plane `MeshData` from the unit-size constants, scaled up by
+/// `scale` via the model matrix so the vertex data stays resolution-independent.
 fn make_ground_mesh(scale: f32) -> MeshData {
     MeshData {
         positions: GROUND_POSITIONS.to_vec(),
@@ -202,6 +218,9 @@ fn make_ground_mesh(scale: f32) -> MeshData {
     }
 }
 
+/// Build a box `MeshData` at `position` with uniform `size`. The unit cube
+/// constants are scaled and translated via the model matrix so all boxes share
+/// the same vertex data and only differ in their transform.
 fn make_box_mesh(position: [f32; 3], size: f32) -> MeshData {
     let model_matrix = Mat4::from_translation(position.into()) * Mat4::from_scale(size);
 
@@ -216,38 +235,54 @@ fn make_box_mesh(position: [f32; 3], size: f32) -> MeshData {
     }
 }
 
-fn setup_default_scene(app: &App) {
-    // Ground plane
-    app.add_mesh(make_ground_mesh(100.0));
+/// Populate the scene with a ground plane and randomly placed boxes.
+///
+/// A fixed seed (42) is used so the layout is deterministic across reloads,
+/// which makes visual regression testing and screenshots reproducible.
+pub fn setup_default_scene(app: &impl App) {
+    app.add_mesh(make_ground_mesh(100.0)).unwrap();
 
-    // Random boxes
     let mut rng = SmallRng::seed_from_u64(42);
     let box_size = 50.0;
 
     for i in 0..DEFAULT_BOX_COUNT {
         let x = rng.gen_range(-300.0..300.0);
         let z = rng.gen_range(-300.0..300.0);
+        // First half of boxes sit on the ground; the rest are raised to
+        // random heights to give the scene visual depth and test the camera
+        // framing from the elevated viewpoint.
         let y = if i < DEFAULT_BOX_COUNT / 2 {
             box_size / 2.0
         } else {
             box_size / 2.0 + rng.gen_range(25.0..150.0)
         };
 
-        app.add_mesh(make_box_mesh([x, y, z], box_size));
+        app.add_mesh(make_box_mesh([x, y, z], box_size)).unwrap();
     }
 
-    // Camera
-    app.set_camera_look_at([0.0, 400.0, 600.0], [0.0, 0.0, 0.0]);
+    // Place the camera high and back so the full spread of boxes is visible.
+    app.set_camera_look_at([0.0, 400.0, 600.0], [0.0, 0.0, 0.0])
+        .unwrap();
 }
 
-/// Handle returned from main() for controlling the application from JS.
-#[wasm_bindgen]
-pub struct AppHandle {
-    app: App,
+pub struct LevelEditor<A: App> {
+    app: A,
 }
 
-#[wasm_bindgen]
-impl AppHandle {
+impl<A: App> LevelEditor<A> {
+    /// Create a level editor around a concrete renderer runtime and populate
+    /// the deterministic default scene. Runtime construction stays outside the
+    /// editor so this type can be used by both native and WASM entrypoints.
+    pub fn from_app(app: A) -> Self {
+        setup_default_scene(&app);
+        Self { app }
+    }
+
+    /// Consume the editor and return the runtime it owns.
+    pub fn into_app(self) -> A {
+        self.app
+    }
+
     /// Return the number of boxes in the default level-editor scene.
     pub fn box_count(&self) -> usize {
         DEFAULT_BOX_COUNT
@@ -257,14 +292,61 @@ impl AppHandle {
     pub fn mesh_count(&self) -> usize {
         DEFAULT_MESH_COUNT
     }
+
+    /// Load a GLTF model from a URL.
+    pub fn load_gltf(&self, url: &str) {
+        self.app
+            .spawn_async(LoadGltfCommand::new(url, "gltf_standard").load());
+    }
 }
 
-/// Entrypoint for the level editor - returns handle for JS interaction
+// ── WASM build ───────────────────────────────────────────────────────────────
+
+/// Handle returned from `start()` for controlling the application from JS.
+///
+/// Wraps `WebAppRuntime` so that only level-editor–specific operations are
+/// exposed across the WASM boundary.  The `wasm_bindgen` attribute is
+/// required on both the struct *and* its `impl` block so that wasm-bindgen
+/// can generate a JS class wrapper — without it on the struct, `start()`
+/// couldn't return an `AppHandle` to JS.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub struct AppHandle {
+    #[cfg(target_arch = "wasm32")]
+    editor: LevelEditor<WebAppRuntime>,
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+impl AppHandle {
+    /// Return the number of boxes in the default level-editor scene.
+    pub fn box_count(&self) -> usize {
+        self.editor.box_count()
+    }
+
+    /// Return the total mesh count in the default level-editor scene.
+    pub fn mesh_count(&self) -> usize {
+        self.editor.mesh_count()
+    }
+
+    /// Load a GLTF model from a URL.
+    pub fn load_gltf(&self, url: &str) {
+        self.editor.load_gltf(url);
+    }
+}
+
+/// WASM entrypoint — called once from JS to boot the renderer and populate the
+/// default scene. Returns an `AppHandle` that JS keeps alive for later calls
+/// (e.g. `load_gltf`).
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub fn start() -> AppHandle {
-    let app = App::new("main-worker", "#canvas0").unwrap();
-    setup_default_scene(&app);
-    AppHandle { app }
+    let app = WebAppRuntime::new("main-worker", "#canvas0").unwrap();
+    let editor = LevelEditor::from_app(app);
+    AppHandle { editor }
 }
 
+// Re-export the web-worker entrypoint that the renderer framework requires.
+// Without this the dedicated worker thread won't find its WASM init function.
+// Only meaningful in the WASM build; on native the worker concept doesn't exist.
+#[cfg(target_arch = "wasm32")]
 renderer::export_worker_entrypoint!();

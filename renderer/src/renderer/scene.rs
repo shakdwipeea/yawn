@@ -1,4 +1,4 @@
-use ultraviolet::{Mat4, Vec3};
+use ultraviolet::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::{
@@ -377,9 +377,5 @@ impl Scene {
 
     pub fn clear_meshes(&mut self) {
         self.meshes.clear();
-    }
-
-    pub fn set_camera_look_at(&mut self, eye: [f32; 3], target: [f32; 3]) {
-        self.cam.look_at(Vec3::from(eye), Vec3::from(target));
     }
 }

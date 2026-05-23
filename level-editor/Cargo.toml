@@ -7,7 +7,11 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "level-editor"
+path = "src/main.rs"
 
 [features]
 default = []
@@ -43,6 +47,12 @@ wgpu = { workspace = true }
 bytemuck = { workspace = true }
 rand = { version = "0.8", features = ["small_rng"] }
 getrandom = { version = "0.2", features = ["js"] }
+futures = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+smithay-client-toolkit = "0.20.0"
+wayland-backend = { version = "0.3.14", features = ["client_system"] }
+wayland-client = { version = "0.31.1", features = ["system"] }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false

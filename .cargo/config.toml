@@ -1,5 +1,9 @@
 [build]
-target = "wasm32-unknown-unknown"
+# Default to desktop build (no target specified)
+# For WASM build, use: --target wasm32-unknown-unknown
+# rustflags are only applied when building for wasm32 target
+
+[target.wasm32-unknown-unknown]
 rustflags = [
     '-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals',
     '-Clink-args=--shared-memory',

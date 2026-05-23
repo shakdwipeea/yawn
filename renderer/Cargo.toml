@@ -52,9 +52,10 @@ ultraviolet = { workspace = true }
 futures = { workspace = true }
 gltf = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 smithay-client-toolkit = "0.20.0"
-wayland-client = "0.31.1"
+wayland-backend = { version = "0.3.14", features = ["client_system"] }
+wayland-client = { version = "0.31.1", features = ["system"] }
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false

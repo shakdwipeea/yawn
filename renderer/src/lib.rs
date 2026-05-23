@@ -1,7 +1,8 @@
-pub mod app_setup;
+pub mod app;
+pub mod app_runtime;
 pub mod camera;
+pub mod events;
 pub mod gltf;
-pub mod message;
 pub mod platform;
 pub mod renderer;
 pub mod task;

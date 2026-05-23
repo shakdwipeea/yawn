@@ -1,30 +1,22 @@
-use std::sync::mpsc::Sender;
+/// Spawn an async future on the appropriate platform executor.
+///
+/// On wasm32 this uses `spawn_local`; on native it spawns a thread and
+/// blocks on the future with `futures::executor`.
+#[cfg(target_arch = "wasm32")]
+pub fn spawn<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + 'static,
+{
+    wasm_bindgen_futures::spawn_local(future);
+}
 
-use crate::message::WindowEvent;
-
-/// Run an async function that produces events, sending each result back
-/// through `sender`. How the future is spawned is platform-specific and
-/// fully encapsulated here.
-pub fn execute_async_event(
-    sender: Sender<WindowEvent>,
-    f: impl std::future::Future<Output = Vec<WindowEvent>> + 'static,
-) {
-    #[cfg(target_arch = "wasm32")]
-    {
-        wasm_bindgen_futures::spawn_local(async move {
-            for event in f.await {
-                sender.send(event).ok();
-            }
-        });
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let boxed = f.boxed_local();
-        std::thread::spawn(move || {
-            for event in futures::executor::block_on(boxed) {
-                sender.send(event).ok();
-            }
-        });
-    }
+/// Native tasks hop to a background thread, so the future must be `Send`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    std::thread::spawn(move || {
+        futures::executor::block_on(future);
+    });
 }

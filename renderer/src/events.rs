@@ -1,16 +1,10 @@
 use core::fmt;
-use std::sync::mpsc::TryRecvError;
-use std::cell::BorrowMutError;
+
+use crate::renderer::{CommandContext, SyncCommand};
 
 #[derive(Debug)]
 pub enum WindowEvent {
     Sync(SyncWindowEvent),
-    Async(AsyncWindowEvent),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AsyncWindowEvent {
-    LoadGltf,
 }
 
 #[derive(Debug)]
@@ -20,9 +14,7 @@ pub enum SyncWindowEvent {
     PointerClick(MouseMessage),
     PointerWheel(WheelMessage),
     Keyboard(KeyboardMessage),
-    CameraOrbit(OrbitMessage),
-    CameraZoom(ZoomMessage),
-    SceneCommand(SceneCommand),
+    AppCommand(Box<dyn SyncCommand>),
 }
 
 #[derive(Debug)]
@@ -40,14 +32,23 @@ pub struct MeshData {
 pub enum SceneCommand {
     Clear,
     AddMesh(MeshData),
-    SetCameraLookAt { eye: [f32; 3], target: [f32; 3] },
+}
+
+impl SyncCommand for SceneCommand {
+    fn run(self: Box<Self>, cx: &mut CommandContext<'_>) {
+        match *self {
+            SceneCommand::Clear => cx.scene.clear_meshes(),
+            SceneCommand::AddMesh(mesh_data) => {
+                cx.add_mesh(mesh_data);
+            }
+        }
+    }
 }
 
 impl fmt::Display for WindowEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WindowEvent::Sync(evt) => write!(f, "Sync({:?})", evt),
-            WindowEvent::Async(evt) => write!(f, "Async({:?})", evt),
         }
     }
 }
@@ -142,50 +143,5 @@ impl KeyboardMessage {
             location: event.location(),
             repeat: event.repeat(),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct OrbitMessage {
-    pub delta_x: f32,
-    pub delta_y: f32,
-}
-
-#[derive(Debug, Clone)]
-pub struct ZoomMessage {
-    pub delta: f32,
-}
-
-#[derive(Debug)]
-pub enum DrainEventError {
-    BorrowError(BorrowMutError),
-    ChannelDisconnected,
-    ChannelEmpty,
-}
-
-impl fmt::Display for DrainEventError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DrainEventError::BorrowError(err) => write!(f, "Failed to borrow renderer: {}", err),
-            DrainEventError::ChannelDisconnected => write!(f, "Event channel disconnected"),
-            DrainEventError::ChannelEmpty => write!(f, "Event channel empty"),
-        }
-    }
-}
-
-impl std::error::Error for DrainEventError {}
-
-impl From<TryRecvError> for DrainEventError {
-    fn from(err: TryRecvError) -> Self {
-        match err {
-            TryRecvError::Empty => DrainEventError::ChannelEmpty,
-            TryRecvError::Disconnected => DrainEventError::ChannelDisconnected,
-        }
-    }
-}
-
-impl From<BorrowMutError> for DrainEventError {
-    fn from(err: BorrowMutError) -> Self {
-        DrainEventError::BorrowError(err)
     }
 }
