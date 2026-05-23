@@ -344,8 +344,7 @@ pub enum WaylandError {
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 struct WaylandDispatchState {
-    /// SCTK's registry helpers own the global cache used by the delegate
-    /// macros, so the state mirrors the minimal setup from `sctk_window.rs`.
+    /// SCTK's registry helpers own the global cache used by the delegate macros.
     registry_state: SctkRegistryState,
     /// Surface enter/leave events are routed through `OutputHandler`, even when
     /// this runtime only needs the toplevel for wgpu surface creation.
@@ -355,6 +354,20 @@ struct WaylandDispatchState {
     sender: Sender<WindowEvent>,
     /// Set by the compositor close request so the native loop can terminate.
     exit: bool,
+    /// Integer buffer scale of the output the surface currently lives on.
+    ///
+    /// Updated whenever the compositor calls
+    /// `CompositorHandler::scale_factor_changed` (e.g. when the window enters a
+    /// HiDPI output). Defaults to 1 — the protocol-level default — so a
+    /// compositor that never reports a scale still produces a 1:1 buffer.
+    current_scale: i32,
+    /// Most recent logical-pixel size reported by `xdg_toplevel.configure`.
+    ///
+    /// Cached so a later `scale_factor_changed` can re-emit a `Resize` event
+    /// with the correct physical buffer dimensions without waiting for the
+    /// compositor to send a fresh configure. Initialised to the toplevel's
+    /// initial size so the very first resize event is well-defined.
+    last_logical_size: (u32, u32),
 }
 
 #[cfg(target_os = "linux")]
@@ -363,9 +376,33 @@ impl CompositorHandler for WaylandDispatchState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
-        _new_factor: i32,
+        surface: &wl_surface::WlSurface,
+        new_factor: i32,
     ) {
+        // Ignore redundant notifications; the compositor may re-emit the same
+        // scale when the surface re-enters an equivalent output.
+        if new_factor == self.current_scale {
+            return;
+        }
+        self.current_scale = new_factor;
+
+        // Tell the compositor that subsequent buffers are supplied at this
+        // integer scale. Without this, a HiDPI compositor would upscale the
+        // logical-sized buffer to physical pixels and produce a blurry image.
+        surface.set_buffer_scale(new_factor);
+
+        // Re-emit a Resize so the renderer reconfigures its swapchain to the
+        // new physical-pixel dimensions. We pair the cached logical size with
+        // the freshly received scale so the dispatcher computes
+        // `logical × scale` consistently with the configure path.
+        let (width, height) = self.last_logical_size;
+        let _ = self
+            .sender
+            .send(WindowEvent::Sync(SyncWindowEvent::Resize(ResizeMessage {
+                width: width as f64,
+                height: height as f64,
+                scale_factor: new_factor as f64,
+            })));
     }
 
     fn transform_changed(
@@ -450,15 +487,35 @@ impl WindowHandler for WaylandDispatchState {
         configure: WindowConfigure,
         _serial: u32,
     ) {
-        if let (Some(width), Some(height)) = (configure.new_size.0, configure.new_size.1) {
-            let _ = self
-                .sender
-                .send(WindowEvent::Sync(SyncWindowEvent::Resize(ResizeMessage {
-                    width: width.get() as f64,
-                    height: height.get() as f64,
-                    scale_factor: 1.0,
-                })));
-        }
+        // Treat a missing size from the compositor as "keep current size":
+        // some compositors send 0 for the unconstrained dimension on the
+        // initial configure and expect the client to pick a sensible value.
+        // Falling back to `last_logical_size` preserves a stable baseline
+        // instead of collapsing the swapchain to zero.
+        let width = configure
+            .new_size
+            .0
+            .map(|v| v.get())
+            .unwrap_or(self.last_logical_size.0);
+        let height = configure
+            .new_size
+            .1
+            .map(|v| v.get())
+            .unwrap_or(self.last_logical_size.1);
+        self.last_logical_size = (width, height);
+
+        // The scale_factor here is the *current* integer buffer scale (set by
+        // `CompositorHandler::scale_factor_changed`). Carrying it through the
+        // Resize message lets `Renderer::resize` compute the physical buffer
+        // size as `logical × scale`, matching what we promised the compositor
+        // via `set_buffer_scale`.
+        let _ = self
+            .sender
+            .send(WindowEvent::Sync(SyncWindowEvent::Resize(ResizeMessage {
+                width: width as f64,
+                height: height as f64,
+                scale_factor: self.current_scale as f64,
+            })));
     }
 }
 
@@ -506,13 +563,18 @@ impl WaylandAppRuntime {
 
         let (sender, receiver) = std::sync::mpsc::channel::<WindowEvent>();
 
-        // Match the SCTK example's delegate setup so the window, compositor,
-        // and registry objects all agree on the state type used for dispatch.
+        // Wire up the SCTK delegates so the window, compositor, and registry
+        // objects all agree on the state type used for dispatch. The scale and
+        // size fields start at neutral values; the compositor will overwrite
+        // them via `scale_factor_changed` and `configure` once the surface is
+        // mapped.
         let dispatch_state = WaylandDispatchState {
             registry_state: SctkRegistryState::new(&globals),
             output_state: OutputState::new(&globals, &qh),
             sender: sender.clone(),
             exit: false,
+            current_scale: 1,
+            last_logical_size: (INITIAL_SIZE, INITIAL_SIZE),
         };
 
         let compositor = CompositorState::bind(&globals, &qh).expect("wl_compositor not available");
