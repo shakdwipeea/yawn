@@ -16,9 +16,9 @@ use wayland_client::{Connection, Proxy};
 ///
 /// SCTK does not expose `raw-window-handle` traits on its `Window`, so we wrap
 /// the connection and surface together and borrow the raw `wl_display` and
-/// `wl_surface` pointers on demand. This mirrors the manual raw-handle setup in
-/// `renderer/src/bin/sctk_window.rs`, but packages it behind the safe traits
-/// that `wgpu::Instance::create_surface` expects.
+/// `wl_surface` pointers on demand. This packages the manual raw-handle setup
+/// behind the safe traits that `wgpu::Instance::create_surface` expects, and
+/// is the only place the renderer reaches into the Wayland C ABI.
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone)]
 pub struct WaylandWindowHandleSource {
