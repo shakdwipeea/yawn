@@ -79,6 +79,15 @@ impl Camera {
 
     /// Compute the orbit rotor from current yaw and pitch.
     /// Yaw rotates around world Y, then pitch tilts around the local right axis.
+    ///
+    /// The pitch angle is negated when constructing the bivector rotor because
+    /// ultraviolet's `Bivec3::from_normalized_axis(unit_x)` represents the
+    /// `e_y ∧ e_z` plane: a positive rotation in that plane sends `+y` toward
+    /// `+z`, which when applied to the starting offset `(0, 0, distance)`
+    /// produces a *negative* Y component. We want a positive pitch (the
+    /// convention used by `look_at` and orbit) to mean "camera tilted upward",
+    /// so we flip the sign here once and keep the rest of the API in the
+    /// intuitive right-handed convention.
     fn orbit_rotor(&self) -> Rotor3 {
         let yaw_rotor =
             Rotor3::from_angle_plane(self.yaw, Bivec3::from_normalized_axis(Vec3::unit_y()));
@@ -87,7 +96,8 @@ impl Camera {
         let mut right = Vec3::unit_x();
         yaw_rotor.rotate_vec(&mut right);
 
-        let pitch_rotor = Rotor3::from_angle_plane(self.pitch, Bivec3::from_normalized_axis(right));
+        let pitch_rotor =
+            Rotor3::from_angle_plane(-self.pitch, Bivec3::from_normalized_axis(right));
 
         // Compose: first yaw, then pitch
         (pitch_rotor * yaw_rotor).normalized()
