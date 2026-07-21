@@ -8,6 +8,18 @@ RSW_VERSION="0.8.0"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 mkdir -p "$HOME/.local/bin" "$HOME/.cargo/bin"
 
+missing_packages=()
+for package in libvulkan1 mesa-vulkan-drivers; do
+    if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq "install ok installed"; then
+        missing_packages+=("$package")
+    fi
+done
+if ((${#missing_packages[@]})); then
+    echo "Installing WebGPU runtime dependencies..."
+    sudo apt-get update
+    sudo apt-get install -y "${missing_packages[@]}"
+fi
+
 install_node() {
     local machine node_arch archive install_dir tmp_dir
     machine="$(uname -m)"
