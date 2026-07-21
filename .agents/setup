@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+NODE_VERSION="22.23.1"
+WASM_PACK_VERSION="0.15.0"
+RSW_VERSION="0.8.0"
+
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+mkdir -p "$HOME/.local/bin" "$HOME/.cargo/bin"
+
+install_node() {
+    local machine node_arch archive install_dir tmp_dir
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64) node_arch="x64" ;;
+        aarch64) node_arch="arm64" ;;
+        *)
+            echo "Unsupported architecture for Node.js: $machine" >&2
+            return 1
+            ;;
+    esac
+
+    archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"
+    install_dir="$HOME/.local/node-v${NODE_VERSION}-linux-${node_arch}"
+    if [[ ! -x "$install_dir/bin/node" ]]; then
+        echo "Installing Node.js v${NODE_VERSION}..."
+        tmp_dir="$(mktemp -d)"
+        trap 'rm -rf "$tmp_dir"' RETURN
+        curl --fail --location --silent --show-error \
+            "https://nodejs.org/dist/v${NODE_VERSION}/${archive}" \
+            --output "$tmp_dir/$archive"
+        curl --fail --location --silent --show-error \
+            "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" \
+            --output "$tmp_dir/SHASUMS256.txt"
+        (
+            cd "$tmp_dir"
+            grep "  ${archive}$" SHASUMS256.txt | sha256sum --check --strict
+        )
+        tar -xJf "$tmp_dir/$archive" -C "$HOME/.local"
+        rm -rf "$tmp_dir"
+        trap - RETURN
+    fi
+
+    for command in node npm npx corepack; do
+        ln -sfn "$install_dir/bin/$command" "$HOME/.local/bin/$command"
+    done
+}
+
+install_wasm_pack() {
+    local machine target archive tmp_dir
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64) target="x86_64-unknown-linux-musl" ;;
+        aarch64) target="aarch64-unknown-linux-musl" ;;
+        *)
+            echo "Unsupported architecture for wasm-pack: $machine" >&2
+            return 1
+            ;;
+    esac
+
+    if ! wasm-pack --version 2>/dev/null | grep -Fq "${WASM_PACK_VERSION}"; then
+        echo "Installing wasm-pack ${WASM_PACK_VERSION}..."
+        archive="wasm-pack-v${WASM_PACK_VERSION}-${target}.tar.gz"
+        tmp_dir="$(mktemp -d)"
+        trap 'rm -rf "$tmp_dir"' RETURN
+        curl --fail --location --silent --show-error \
+            "https://github.com/wasm-bindgen/wasm-pack/releases/download/v${WASM_PACK_VERSION}/${archive}" \
+            --output "$tmp_dir/$archive"
+        tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
+        install -m 0755 \
+            "$tmp_dir/wasm-pack-v${WASM_PACK_VERSION}-${target}/wasm-pack" \
+            "$HOME/.cargo/bin/wasm-pack"
+        rm -rf "$tmp_dir"
+        trap - RETURN
+    fi
+}
+
+install_node
+
+if ! command -v rustup >/dev/null 2>&1; then
+    echo "Installing rustup..."
+    curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+        https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path \
+        --default-toolchain none
+fi
+source "$HOME/.cargo/env"
+
+toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
+echo "Installing Rust toolchain ${toolchain}..."
+rustup toolchain install "$toolchain" --profile minimal \
+    --component rust-src \
+    --target wasm32-unknown-unknown
+
+install_wasm_pack
+
+if ! rsw --version 2>/dev/null | grep -Fq "${RSW_VERSION}"; then
+    echo "Installing rsw ${RSW_VERSION}..."
+    cargo install rsw --version "$RSW_VERSION" --locked
+fi
+
+# Amp shells include ~/.local/bin, while setup's PATH changes do not persist.
+for command in cargo rustc rustdoc rustfmt rustup wasm-pack rsw; do
+    ln -sfn "$HOME/.cargo/bin/$command" "$HOME/.local/bin/$command"
+done
+
+echo "Installing JavaScript dependencies..."
+npm ci
+
+echo "Orb setup complete."

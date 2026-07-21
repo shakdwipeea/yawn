@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+for command in node npm cargo wasm-pack rsw; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "Missing required command after orb resume: $command" >&2
+        exit 1
+    fi
+done
+
+echo "Orb environment ready."
