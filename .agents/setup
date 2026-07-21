@@ -118,4 +118,7 @@ done
 echo "Installing JavaScript dependencies..."
 npm ci
 
+echo "Building the application..."
+npm run build
+
 echo "Orb setup complete."
