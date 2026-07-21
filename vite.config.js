@@ -57,7 +57,7 @@ export default defineConfig({
   },
   preview: {
     port: 8080,
-    allowedHosts: portalHost ? [portalHost] : [],
+    allowedHosts: portalHost ? [portalHost, ".e2b.app"] : [],
     headers: {
       "Cross-Origin-Embedder-Policy": "require-corp",
       "Cross-Origin-Opener-Policy": "same-origin",
