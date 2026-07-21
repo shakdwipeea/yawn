@@ -46,7 +46,3 @@ target/
 # WASM build artifacts
 .rsw/
 static/level-editor/
-
-# Amp runtime artifacts
-.amp/in/
-.amp/portals/.service-ports

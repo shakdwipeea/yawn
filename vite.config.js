@@ -7,9 +7,6 @@ import copy from "rollup-plugin-copy";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const portalHost = process.env.PUBLIC_URL
-  ? new URL(process.env.PUBLIC_URL).hostname
-  : undefined;
 
 export default defineConfig({
   build: {
@@ -57,7 +54,6 @@ export default defineConfig({
   },
   preview: {
     port: 8080,
-    allowedHosts: portalHost ? [portalHost, ".e2b.app"] : [],
     headers: {
       "Cross-Origin-Embedder-Policy": "require-corp",
       "Cross-Origin-Opener-Policy": "same-origin",
