@@ -9,7 +9,7 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 mkdir -p "$HOME/.local/bin" "$HOME/.cargo/bin"
 
 missing_packages=()
-for package in libvulkan1 mesa-vulkan-drivers; do
+for package in libvulkan1 mesa-vulkan-drivers xauth xvfb; do
     if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq "install ok installed"; then
         missing_packages+=("$package")
     fi
