@@ -10,6 +10,7 @@ const __dirname = path.dirname(__filename);
 const portalHost = process.env.PUBLIC_URL
   ? new URL(process.env.PUBLIC_URL).hostname
   : undefined;
+const serverPort = Number(process.env.PORT) || 8080;
 
 export default defineConfig({
   build: {
@@ -46,7 +47,10 @@ export default defineConfig({
     wasm(),
   ],
   server: {
-    port: 8080,
+    host: process.env.PORT ? "0.0.0.0" : undefined,
+    port: serverPort,
+    strictPort: true,
+    allowedHosts: portalHost ? [portalHost, ".e2b.app"] : [],
     headers: {
       "Cross-Origin-Embedder-Policy": "require-corp",
       "Cross-Origin-Opener-Policy": "same-origin",

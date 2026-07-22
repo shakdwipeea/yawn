@@ -10,4 +10,7 @@ for command in node npm cargo wasm-pack rsw; do
     fi
 done
 
+echo "Ensuring orb development services are running..."
+amp orb services ensure
+
 echo "Orb environment ready."

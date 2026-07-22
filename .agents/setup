@@ -121,4 +121,7 @@ npm ci
 echo "Building the application..."
 npm run build
 
+echo "Starting orb development services..."
+amp orb services ensure
+
 echo "Orb setup complete."
