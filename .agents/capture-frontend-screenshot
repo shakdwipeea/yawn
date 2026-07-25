@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+output="${1:-.amp/in/artifacts/frontend.png}"
+if [[ "$output" != /* ]]; then
+    output="$repo_root/$output"
+fi
+
+for command in npm amp node xvfb-run file identify; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "Missing required command: $command. Run .agents/setup in an Amp orb first." >&2
+        exit 1
+    fi
+done
+
+mkdir -p "$(dirname "$output")"
+
+echo "Building the frontend/WASM application..."
+(cd "$repo_root" && npm run build)
+
+echo "Ensuring the supervised frontend preview service is running..."
+service_output="$(cd "$repo_root" && amp orb services ensure)"
+printf '%s\n' "$service_output"
+portal_file="$repo_root/.amp/portals/yawn-preview.json"
+portal_url=""
+if [[ -f "$portal_file" ]]; then
+    portal_url="$(node -e '
+      const portal = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(portal.links?.[0]?.url ?? "");
+    ' "$portal_file")"
+fi
+if [[ -z "$portal_url" ]]; then
+    echo "Could not determine the frontend portal URL from $portal_file." >&2
+    exit 1
+fi
+
+echo "Opening the frontend in headful Chromium under Xvfb..."
+(
+    cd "$repo_root"
+    xvfb-run -a node --input-type=module - "$portal_url" "$output" <<'EOF'
+import { chromium } from "@playwright/test";
+
+const [, , portalUrl, output] = process.argv;
+const errors = [];
+const workerLogs = [];
+const browser = await chromium.launch({
+  headless: false,
+  args: [
+    "--enable-unsafe-webgpu",
+    "--enable-features=Vulkan",
+    "--ignore-gpu-blocklist",
+    "--use-angle=vulkan",
+    "--use-vulkan=swiftshader",
+    "--use-webgpu-adapter=swiftshader",
+    "--ozone-platform=x11",
+  ],
+});
+
+try {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (
+      message.type() === "error" &&
+      !(message.text().includes("404") && message.text().includes("Failed to load resource"))
+    ) {
+      errors.push(message.text());
+    }
+  });
+  page.on("worker", (worker) => {
+    worker.on("console", (message) => {
+      workerLogs.push(message.text());
+      if (message.type() === "error") {
+        errors.push(`[worker] ${message.text()}`);
+      }
+    });
+  });
+
+  await page.goto(portalUrl, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => window.app !== undefined, null, { timeout: 30_000 });
+
+  const counts = await page.evaluate(() => ({
+    boxCount: window.app.box_count(),
+    meshCount: window.app.mesh_count(),
+  }));
+  if (counts.boxCount !== 15 || counts.meshCount !== 16) {
+    throw new Error(`Unexpected frontend app state: ${JSON.stringify(counts)}`);
+  }
+
+  const deadline = Date.now() + 30_000;
+  while (
+    Date.now() < deadline &&
+    !(
+      workerLogs.some((line) => line.includes("Adapter info:")) &&
+      workerLogs.some((line) => line.includes("suface size:"))
+    )
+  ) {
+    await page.waitForTimeout(100);
+  }
+  if (!workerLogs.some((line) => line.includes("Adapter info:"))) {
+    throw new Error(`WebGPU worker did not initialize:\n${workerLogs.join("\n")}`);
+  }
+  if (!workerLogs.some((line) => line.includes("suface size:"))) {
+    throw new Error(`WebGPU surface was not configured:\n${workerLogs.join("\n")}`);
+  }
+
+  await page.waitForTimeout(500);
+  if (errors.length > 0) {
+    throw new Error(`Frontend errors:\n${errors.join("\n")}`);
+  }
+  await page.screenshot({ path: output });
+} finally {
+  await browser.close();
+}
+EOF
+)
+
+if ! file "$output" | grep -Fq "PNG image data"; then
+    echo "Frontend capture is not a valid PNG: $output" >&2
+    exit 1
+fi
+color_count="$(identify -format '%k' "$output")"
+if ((color_count <= 1)); then
+    echo "Frontend capture is blank or a single solid color: $output" >&2
+    exit 1
+fi
+
+echo "Frontend screenshot: $output"

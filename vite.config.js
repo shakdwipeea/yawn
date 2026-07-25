@@ -50,7 +50,9 @@ export default defineConfig({
     host: process.env.PORT ? "0.0.0.0" : undefined,
     port: serverPort,
     strictPort: true,
-    allowedHosts: portalHost ? [portalHost, ".e2b.app"] : [],
+    allowedHosts: portalHost
+      ? [portalHost, ".e2b.app", ".onamp.dev"]
+      : [".onamp.dev"],
     headers: {
       "Cross-Origin-Embedder-Policy": "require-corp",
       "Cross-Origin-Opener-Policy": "same-origin",
@@ -61,7 +63,9 @@ export default defineConfig({
   },
   preview: {
     port: 8080,
-    allowedHosts: portalHost ? [portalHost, ".e2b.app"] : [],
+    allowedHosts: portalHost
+      ? [portalHost, ".e2b.app", ".onamp.dev"]
+      : [".onamp.dev"],
     headers: {
       "Cross-Origin-Embedder-Policy": "require-corp",
       "Cross-Origin-Opener-Policy": "same-origin",

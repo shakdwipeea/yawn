@@ -11,6 +11,10 @@ export default defineConfig({
       args: [
         "--enable-unsafe-webgpu",
         "--enable-features=Vulkan",
+        "--ignore-gpu-blocklist",
+        "--use-angle=vulkan",
+        "--use-vulkan=swiftshader",
+        "--use-webgpu-adapter=swiftshader",
         "--ozone-platform=x11",
       ],
     },

@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 #[cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc, sync::mpsc::Receiver};
+use std::{cell::RefCell, rc::Rc};
 
 #[cfg(target_os = "linux")]
 use raw_window_handle::{
@@ -53,11 +53,13 @@ use web_sys::{AddEventListenerOptions, DedicatedWorkerGlobalScope};
 
 use crate::{
     app::App,
-    events::{ResizeMessage, SyncWindowEvent, WindowEvent},
+    events::{SyncWindowEvent, WindowEvent},
     renderer::SyncCommand,
     task,
 };
 
+#[cfg(target_os = "linux")]
+use crate::events::ResizeMessage;
 #[cfg(target_arch = "wasm32")]
 use crate::platform::web;
 #[cfg(target_arch = "wasm32")]

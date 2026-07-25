@@ -4,3 +4,8 @@ services:
     portal:
       title: Yawn
       description: WebGPU level editor development server with hot reload.
+  yawn-preview:
+    command: npm start -- --host 0.0.0.0 --port "$PORT"
+    portal:
+      title: Yawn Preview
+      description: WebGPU level editor preview.
