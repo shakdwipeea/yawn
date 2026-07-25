@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+output="${1:-.amp/in/artifacts/native.png}"
+if [[ "$output" != /* ]]; then
+    output="$repo_root/$output"
+fi
+
+for command in cargo weston weston-screenshooter file identify; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "Missing required command: $command. Run .agents/setup in an Amp orb first." >&2
+        exit 1
+    fi
+done
+if ! pkg-config --exists wayland-client xkbcommon; then
+    echo "Missing native Wayland development libraries. Run .agents/setup first." >&2
+    exit 1
+fi
+
+runtime_dir="$(mktemp -d /tmp/yawn-native-wayland.XXXXXX)"
+capture_dir="$(mktemp -d /tmp/yawn-native-capture.XXXXXX)"
+weston_log="$(mktemp /tmp/yawn-native-weston.XXXXXX.log)"
+app_log="$(mktemp /tmp/yawn-native-app.XXXXXX.log)"
+socket_name="yawn-native-$$"
+weston_pid=""
+app_pid=""
+
+cleanup() {
+    if [[ -n "$app_pid" ]]; then
+        kill "$app_pid" 2>/dev/null || true
+        wait "$app_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$weston_pid" ]]; then
+        kill "$weston_pid" 2>/dev/null || true
+        wait "$weston_pid" 2>/dev/null || true
+    fi
+    rm -rf "$runtime_dir" "$capture_dir"
+    rm -f "$weston_log" "$app_log"
+}
+trap cleanup EXIT
+
+chmod 700 "$runtime_dir"
+mkdir -p "$(dirname "$output")"
+
+echo "Building the native level-editor binary..."
+(cd "$repo_root" && cargo build --locked --bin level-editor)
+
+echo "Starting an ephemeral software-rendered Wayland compositor..."
+XDG_RUNTIME_DIR="$runtime_dir" \
+LIBGL_ALWAYS_SOFTWARE=1 \
+weston \
+    --backend=headless-backend.so \
+    --use-gl \
+    --width=640 \
+    --height=480 \
+    --socket="$socket_name" \
+    --shell=desktop-shell.so \
+    --idle-time=0 \
+    --no-config \
+    --debug \
+    --log="$weston_log" &
+weston_pid=$!
+
+for _ in $(seq 1 100); do
+    if [[ -S "$runtime_dir/$socket_name" ]]; then
+        break
+    fi
+    if ! kill -0 "$weston_pid" 2>/dev/null; then
+        echo "Weston exited before creating its Wayland socket:" >&2
+        cat "$weston_log" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+if [[ ! -S "$runtime_dir/$socket_name" ]]; then
+    echo "Timed out waiting for Weston's Wayland socket:" >&2
+    cat "$weston_log" >&2
+    exit 1
+fi
+
+app_environment=(
+    "XDG_RUNTIME_DIR=$runtime_dir"
+    "WAYLAND_DISPLAY=$socket_name"
+    "WGPU_BACKEND=vulkan"
+    "LIBGL_ALWAYS_SOFTWARE=1"
+    "RUST_LOG=info,wgpu_core=warn,wgpu_hal=warn,naga=warn"
+)
+if [[ -f /usr/share/vulkan/icd.d/lvp_icd.x86_64.json ]]; then
+    app_environment+=("VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json")
+fi
+
+echo "Launching the native Linux binary..."
+env "${app_environment[@]}" "$repo_root/target/debug/level-editor" >"$app_log" 2>&1 &
+app_pid=$!
+
+initialized=false
+for _ in $(seq 1 300); do
+    if grep -Fq "Adapter info:" "$app_log" && grep -Fq "suface size:" "$app_log"; then
+        initialized=true
+        break
+    fi
+    if ! kill -0 "$app_pid" 2>/dev/null; then
+        echo "The native app exited before renderer initialization:" >&2
+        cat "$app_log" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+if [[ "$initialized" != true ]]; then
+    echo "Timed out waiting for native renderer initialization:" >&2
+    cat "$app_log" >&2
+    exit 1
+fi
+
+# Give the compositor several presented frames after initialization before
+# reading back the virtual output.
+sleep 2
+if ! kill -0 "$app_pid" 2>/dev/null; then
+    echo "The native app exited before screenshot capture:" >&2
+    cat "$app_log" >&2
+    exit 1
+fi
+
+echo "Capturing the native Wayland output..."
+(
+    cd "$capture_dir"
+    XDG_RUNTIME_DIR="$runtime_dir" \
+    WAYLAND_DISPLAY="$socket_name" \
+        timeout 15s weston-screenshooter
+) || true
+captured_png="$(find "$capture_dir" -maxdepth 1 -type f -name 'wayland-screenshot-*.png' -print -quit)"
+if [[ -z "$captured_png" ]]; then
+    echo "weston-screenshooter did not produce a PNG:" >&2
+    cat "$weston_log" >&2
+    exit 1
+fi
+
+install -m 0644 "$captured_png" "$output"
+if ! file "$output" | grep -Fq "PNG image data"; then
+    echo "Native capture is not a valid PNG: $output" >&2
+    exit 1
+fi
+color_count="$(identify -format '%k' "$output")"
+if ((color_count <= 1)); then
+    echo "Native capture is blank or a single solid color: $output" >&2
+    exit 1
+fi
+
+echo "Native screenshot: $output"

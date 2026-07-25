@@ -9,13 +9,23 @@ export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 mkdir -p "$HOME/.local/bin" "$HOME/.cargo/bin"
 
 missing_packages=()
-for package in libvulkan1 mesa-vulkan-drivers xauth xvfb; do
+for package in \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    xauth \
+    xvfb \
+    weston \
+    libwayland-dev \
+    libxkbcommon-dev \
+    imagemagick \
+    file \
+    pkg-config; do
     if ! dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -Fq "install ok installed"; then
         missing_packages+=("$package")
     fi
 done
 if ((${#missing_packages[@]})); then
-    echo "Installing WebGPU runtime dependencies..."
+    echo "Installing WebGPU and native Wayland runtime dependencies..."
     sudo apt-get update
     sudo apt-get install -y "${missing_packages[@]}"
 fi
@@ -101,6 +111,7 @@ toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
 echo "Installing Rust toolchain ${toolchain}..."
 rustup toolchain install "$toolchain" --profile minimal \
     --component rust-src \
+    --component rustfmt \
     --target wasm32-unknown-unknown
 
 install_wasm_pack
@@ -117,6 +128,9 @@ done
 
 echo "Installing JavaScript dependencies..."
 npm ci
+
+echo "Installing Chromium for frontend visual verification..."
+npx playwright install --with-deps chromium
 
 echo "Building the application..."
 npm run build

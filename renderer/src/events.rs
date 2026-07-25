@@ -1,25 +1,54 @@
 use core::fmt;
-use std::sync::mpsc::TryRecvError;
-use std::cell::BorrowMutError;
+
+use crate::renderer::{CommandContext, SyncCommand};
 
 #[derive(Debug)]
 pub enum WindowEvent {
+    Sync(SyncWindowEvent),
+}
+
+#[derive(Debug)]
+pub enum SyncWindowEvent {
     Resize(ResizeMessage),
     PointerMove(MouseMessage),
     PointerClick(MouseMessage),
     PointerWheel(WheelMessage),
     Keyboard(KeyboardMessage),
+    AppCommand(Box<dyn SyncCommand>),
 }
 
-// Display for WindowEvent
+#[derive(Debug)]
+pub struct MeshData {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Vec<[f32; 3]>,
+    pub uvs: Vec<[f32; 2]>,
+    pub indices: Vec<u32>,
+    pub model_matrix: [f32; 16],
+    pub shader_source: String,
+    pub pipeline_key: String,
+}
+
+#[derive(Debug)]
+pub enum SceneCommand {
+    Clear,
+    AddMesh(MeshData),
+}
+
+impl SyncCommand for SceneCommand {
+    fn run(self: Box<Self>, cx: &mut CommandContext<'_>) {
+        match *self {
+            SceneCommand::Clear => cx.scene.clear_meshes(),
+            SceneCommand::AddMesh(mesh_data) => {
+                cx.add_mesh(mesh_data);
+            }
+        }
+    }
+}
+
 impl fmt::Display for WindowEvent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            WindowEvent::Resize(msg) => write!(f, "Resize: {:?}", msg),
-            WindowEvent::PointerMove(msg) => write!(f, "PointerMove: {:?}", msg),
-            WindowEvent::PointerClick(msg) => write!(f, "PointerClick: {:?}", msg),
-            WindowEvent::PointerWheel(msg) => write!(f, "PointerWheel: {:?}", msg),
-            WindowEvent::Keyboard(msg) => write!(f, "Keyboard: {:?}", msg),
+            WindowEvent::Sync(evt) => write!(f, "Sync({:?})", evt),
         }
     }
 }
@@ -45,6 +74,7 @@ pub struct MouseMessage {
 }
 
 impl MouseMessage {
+    #[cfg(target_arch = "wasm32")]
     pub fn from_evt(event: web_sys::MouseEvent) -> Self {
         let window = web_sys::window().unwrap();
         Self {
@@ -73,6 +103,7 @@ pub struct WheelMessage {
 }
 
 impl WheelMessage {
+    #[cfg(target_arch = "wasm32")]
     pub fn from_evt(event: web_sys::WheelEvent) -> Self {
         let window = web_sys::window().unwrap();
         Self {
@@ -100,6 +131,7 @@ pub struct KeyboardMessage {
 }
 
 impl KeyboardMessage {
+    #[cfg(target_arch = "wasm32")]
     pub fn from_evt(event: web_sys::KeyboardEvent) -> Self {
         Self {
             key: event.key(),
@@ -111,39 +143,5 @@ impl KeyboardMessage {
             location: event.location(),
             repeat: event.repeat(),
         }
-    }
-}
-
-#[derive(Debug)]
-pub enum DrainEventError {
-    BorrowError(BorrowMutError),
-    ChannelDisconnected,
-    ChannelEmpty,
-}
-
-impl fmt::Display for DrainEventError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DrainEventError::BorrowError(err) => write!(f, "Failed to borrow renderer: {}", err),
-            DrainEventError::ChannelDisconnected => write!(f, "Event channel disconnected"),
-            DrainEventError::ChannelEmpty => write!(f, "Event channel empty"),
-        }
-    }
-}
-
-impl std::error::Error for DrainEventError {}
-
-impl From<TryRecvError> for DrainEventError {
-    fn from(err: TryRecvError) -> Self {
-        match err {
-            TryRecvError::Empty => DrainEventError::ChannelEmpty,
-            TryRecvError::Disconnected => DrainEventError::ChannelDisconnected,
-        }
-    }
-}
-
-impl From<BorrowMutError> for DrainEventError {
-    fn from(err: BorrowMutError) -> Self {
-        DrainEventError::BorrowError(err)
     }
 }

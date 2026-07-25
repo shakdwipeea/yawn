@@ -1,30 +1,93 @@
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    marker::PhantomData,
-    rc::Rc,
-    sync::mpsc::Receiver,
-};
+use std::{collections::HashMap, marker::PhantomData};
 
 use futures::channel::oneshot;
 use log::info;
 use ultraviolet::Vec4;
-use wasm_bindgen::{prelude::Closure, JsCast};
-use wasm_bindgen_futures::{spawn_local, JsFuture};
-use web_sys::{DedicatedWorkerGlobalScope, File, MessageEvent};
 
 use crate::{
-    gltf::{load_gltf_model, ImportError, ModelBounds},
-    message::{DrainEventError, MouseMessage, ResizeMessage, WindowEvent},
-    renderer::scene::Scene,
+    events::MeshData,
+    renderer::surface::{SurfaceContext, WindowDimension},
 };
 
+mod event_loop;
 pub mod scene;
+pub mod surface;
 
 // Re-export commonly used types
 pub use scene::Mesh;
 
+/// Boxed command objects run on the renderer thread with just the state they
+/// need. Async work lives outside this trait and can feed results back through
+/// [`crate::app::App::spawn_async`].
+pub trait SyncCommand: std::fmt::Debug + Send + 'static {
+    /// Execute the command against the renderer state exposed via
+    /// [`CommandContext`]. Using `self: Box<Self>` keeps the trait object-safe
+    /// without forcing commands into a shared enum.
+    fn run(self: Box<Self>, cx: &mut CommandContext<'_>);
+}
+
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+/// Narrow command surface exposed to boxed sync commands.
+///
+/// Commands often need scene state, GPU uploads, and immutable renderer
+/// context, but they should not own the full renderer object. This keeps
+/// command implementations composable without reintroducing an app-wide enum.
+pub struct CommandContext<'a> {
+    pub scene: &'a mut scene::Scene,
+    pub resources: &'a mut GpuResources,
+    pub context: &'a RendererContext,
+}
+
+impl<'a> CommandContext<'a> {
+    pub fn new(
+        scene: &'a mut scene::Scene,
+        resources: &'a mut GpuResources,
+        context: &'a RendererContext,
+    ) -> Self {
+        Self {
+            scene,
+            resources,
+            context,
+        }
+    }
+
+    /// Shared mesh upload path used by built-in and app-defined commands.
+    pub fn add_mesh(&mut self, upload: MeshData) {
+        let device = &self.context.device;
+        let surface_format = self.context.surface_config.format;
+
+        let pipeline_index = self.resources.get_or_create_pipeline(
+            device,
+            &upload.pipeline_key,
+            &scene::mesh_vertex_layout(),
+            &upload.shader_source,
+            surface_format,
+        );
+
+        let m = upload.model_matrix;
+        let model_matrix = ultraviolet::Mat4::new(
+            ultraviolet::Vec4::new(m[0], m[1], m[2], m[3]),
+            ultraviolet::Vec4::new(m[4], m[5], m[6], m[7]),
+            ultraviolet::Vec4::new(m[8], m[9], m[10], m[11]),
+            ultraviolet::Vec4::new(m[12], m[13], m[14], m[15]),
+        );
+        let mesh = scene::MeshBuilder::default()
+            .with_vertices(
+                device,
+                self.resources,
+                &upload.positions,
+                &upload.normals,
+                &upload.uvs,
+            )
+            .with_indices(device, self.resources, &upload.indices)
+            .with_pipeline(pipeline_index)
+            .with_model_matrix(device, self.resources, model_matrix)
+            .build();
+
+        self.scene.meshes.push(mesh);
+    }
+}
 
 pub struct GpuResources {
     // Core resources
@@ -265,15 +328,14 @@ pub struct RendererContext {
     pub depth_view: wgpu::TextureView,
 }
 
-pub struct Renderer<T: scene::Scene> {
-    canvas: web_sys::OffscreenCanvas,
-    events_chan: Receiver<WindowEvent>,
-    context: RendererContext,
-    resources: GpuResources,
-    scene: T,
+pub struct Renderer {
+    surface_size: WindowDimension,
+    pub context: RendererContext,
+    pub resources: GpuResources,
+    pub scene: scene::Scene,
 }
 
-impl<T: Scene + 'static> Renderer<T> {
+impl Renderer {
     fn create_depth_texture(
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
@@ -307,16 +369,15 @@ impl<T: Scene + 'static> Renderer<T> {
         self.context.depth_view = view;
     }
 
-    pub async fn new(canvas: web_sys::OffscreenCanvas, events_chan: Receiver<WindowEvent>) -> Self {
+    pub async fn new(surface_context: SurfaceContext) -> Self {
+        let SurfaceContext { target, size } = surface_context;
         let id = wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU,
+            backends: wgpu::Backends::all(),
             ..Default::default()
         };
 
         let instance = wgpu::Instance::new(&id);
-        let surface = instance
-            .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()))
-            .unwrap();
+        let surface = instance.create_surface(target).unwrap();
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -344,8 +405,8 @@ impl<T: Scene + 'static> Renderer<T> {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_caps.formats[0],
-            width: canvas.clone().width(),
-            height: canvas.clone().height(),
+            width: size.width,
+            height: size.height,
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
@@ -369,19 +430,18 @@ impl<T: Scene + 'static> Renderer<T> {
             depth_view,
         };
 
-        let scene = T::setup(&context, &mut resources);
+        let scene = scene::Scene::new(&context, &mut resources);
 
         Self {
-            canvas,
-            events_chan,
+            surface_size: size,
             context,
             scene,
             resources,
         }
     }
 
-    fn render(&mut self, time: f32) {
-        self.scene.update(&self.context, &mut self.resources);
+    pub fn render(&mut self, time: f32) {
+        self.scene.update(&self.context, &mut self.resources, time);
 
         let surface_texture = self.context.surface.get_current_texture().unwrap();
         let texture_view = surface_texture.texture.create_view(&Default::default());
@@ -421,11 +481,11 @@ impl<T: Scene + 'static> Renderer<T> {
                 timestamp_writes: None,
             });
 
-            for (i, bind_group) in self.scene.bind_groups().iter().enumerate() {
+            for (i, bind_group) in self.scene.bind_groups.iter().enumerate() {
                 render_pass.set_bind_group(i as u32, bind_group, &[]);
             }
 
-            for mesh in self.scene.meshes() {
+            for mesh in self.scene.meshes.iter() {
                 render_pass.set_pipeline(self.resources.get_pipeline_by_index(mesh.pipeline_index));
 
                 render_pass.set_vertex_buffer(
@@ -556,215 +616,9 @@ impl<T: Scene + 'static> Renderer<T> {
 
         Vec4::new(depth_value, 0.0, 0.0, 0.0)
     }
-
-    pub async fn handle_event(renderer: Rc<RefCell<Self>>, event: WindowEvent) {
-        match event {
-            WindowEvent::PointerMove(msg) => {
-                renderer.borrow_mut().mouse_move(msg);
-            }
-            WindowEvent::Resize(msg) => {
-                renderer.borrow_mut().resize(msg);
-            }
-            WindowEvent::PointerClick(msg) => {
-                {
-                    log::info!("click start");
-
-                    let mut r = renderer.borrow_mut();
-                    let x = (msg.offset_x * msg.scale_factor) as f32;
-                    let y = (msg.offset_y * msg.scale_factor) as f32;
-                    r.scene.handle_mouse_click(x, y);
-                    log::info!("clicked");
-                }
-
-                // Read pixel from depth texture at click coordinates
-                // let renderer_clone = renderer.clone();
-                // let x_coord = msg.offset_x as u32;
-                // let y_coord = msg.offset_y as u32;
-                // let pixel_value = renderer_clone
-                //     .borrow()
-                //     .read_pixel_from_texture(x_coord, y_coord)
-                //     .await;
-                // log::info!(
-                //     "Depth pixel at ({}, {}): {:?}",
-                //     x_coord,
-                //     y_coord,
-                //     pixel_value
-                // );
-            }
-            WindowEvent::PointerWheel(msg) => {
-                let mut r = renderer.borrow_mut();
-                r.scene.handle_zoom(msg.delta_y as f32);
-            }
-            WindowEvent::Keyboard(msg) => {
-                log::info!("Key event received: {:?}", msg);
-
-                // Check for 'L' key press
-                if msg.key == "l" || msg.key == "L" {
-                    let renderer_clone = renderer.clone();
-                    spawn_local(async move {
-                        if let Err(e) = Self::show_file_picker_and_load(renderer_clone).await {
-                            log::error!("Failed to load file: {:?}", e);
-                        }
-                    });
-                }
-            }
-        }
-    }
-
-    fn drain_events(renderer: &Rc<RefCell<Self>>) -> Result<(), DrainEventError> {
-        loop {
-            let event = renderer.try_borrow_mut()?
-                .events_chan.try_recv()?;
-
-            let renderer_clone = renderer.clone();
-            spawn_local(async move {
-                Self::handle_event(renderer_clone, event).await;
-            });
-        }
-    }
-
-    pub fn run_render_loop(renderer: Rc<RefCell<Renderer<T>>>) {
-        let render_frame: Closure<dyn FnMut(f32)> = Closure::new(move |time: f32| {
-            {
-                if let Err(e) = Self::drain_events(&renderer) {
-                    match e {
-                        DrainEventError::ChannelEmpty => {
-                            // Normal condition, no error needed
-                        }
-                        DrainEventError::ChannelDisconnected => {
-                            log::warn!("Event channel disconnected; stopping event polling");
-                        }
-                        DrainEventError::BorrowError(_) => {
-                            log::error!("Failed to borrow renderer: {}", e);
-                        }
-                    }
-                }
-            }
-
-            {
-                if let Ok(mut r) = renderer.try_borrow_mut() {
-                    r.render(time);
-                }
-            }
-
-            Self::run_render_loop(renderer.clone());
-        });
-
-        let global = js_sys::global().unchecked_into::<DedicatedWorkerGlobalScope>();
-
-        global
-            .request_animation_frame(render_frame.as_ref().unchecked_ref())
-            .unwrap();
-
-        render_frame.forget();
-    }
-
-    fn resize(&mut self, msg: ResizeMessage) {
-        let new_width = (msg.width * msg.scale_factor) as u32;
-        let new_height = (msg.height * msg.scale_factor) as u32;
-        if new_width != self.canvas.width() || new_height != self.canvas.height() {
-            self.context.surface_config.width = new_width;
-            self.context.surface_config.height = new_height;
-            self.context
-                .surface
-                .configure(&self.context.device, &self.context.surface_config);
-            self.recreate_depth_texture();
-
-            self.scene.resize(
-                new_width as f64,
-                new_height as f64,
-                msg.scale_factor,
-                &self.context.queue,
-            );
-
-            info!(
-                "Resized: ({}, {}), scale: {}",
-                new_width, new_height, msg.scale_factor
-            );
-        }
-    }
-
-    pub fn mouse_move(&mut self, msg: MouseMessage) {
-        if (msg.buttons & 0x04) != 0 {
-            let delta_x = (msg.movement_x * msg.scale_factor) as f32;
-            let delta_y = (msg.movement_y * msg.scale_factor) as f32;
-            self.scene.handle_orbit(delta_x, delta_y);
-        }
-    }
-
-    // currently this replaces everything, will need more sophisticated mechanisms later
-    pub async fn load_assets_async(renderer: Rc<RefCell<Renderer<T>>>) -> Result<(), ImportError> {
-        let (device, surface_format) = {
-            let r = renderer.borrow();
-            (r.context.device.clone(), r.context.surface_config.format)
-        };
-
-        let mut meshes = Vec::new();
-
-        let mut original_resources = {
-            let mut r = renderer.borrow_mut();
-            r.scene.clear();
-            std::mem::take(&mut r.resources)
-        };
-
-        let bounds = load_gltf_model(
-            &device,
-            &mut original_resources,
-            &mut meshes,
-            surface_format,
-        )
-        .await?;
-
-        {
-            let mut r = renderer.borrow_mut();
-            r.resources = original_resources;
-
-            for mesh in meshes {
-                r.scene.add_mesh(mesh);
-            }
-
-            if let Some(ModelBounds { min, max }) = bounds {
-                let center = ultraviolet::Vec3::new(
-                    (min[0] + max[0]) * 0.5,
-                    (min[1] + max[1]) * 0.5,
-                    (min[2] + max[2]) * 0.5,
-                );
-
-                let extent =
-                    ultraviolet::Vec3::new(max[0] - min[0], max[1] - min[1], max[2] - min[2]);
-                let radius =
-                    0.5 * (extent.x * extent.x + extent.y * extent.y + extent.z * extent.z).sqrt();
-                let radius = radius.max(1.0);
-
-                // set the camera position after load, so we are not disoriented
-                let eye_offset = ultraviolet::Vec3::new(0.0, radius * 0.05, radius * 0.25);
-
-                // Keep the near plane proportional to the model size to avoid
-                // extreme depth ranges when loading very large assets
-                let near_plane = (radius * 0.001).max(0.1);
-
-                // The far plane must be far enough to cover the entire model.
-                // Using a fixed upper clamp caused large models to be clipped
-                // completely; relying on the model radius instead.
-                let far_plane = (radius * 4.0).max(near_plane + 1.0);
-                r.scene.set_camera_depth_range(near_plane, far_plane);
-                r.scene.set_camera_look_at(center + eye_offset, center);
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn show_file_picker_and_load(
-        renderer: Rc<RefCell<Renderer<T>>>,
-    ) -> Result<(), ImportError> {
-        // For now, we'll just call load_assets_async which loads the default model
-        // In a full implementation, we'd modify load_gltf_model to accept the file data
-        Self::load_assets_async(renderer).await
-    }
 }
 
-impl<T: scene::Scene> From<BufferIndex<T>> for u32 {
+impl<T> From<BufferIndex<T>> for u32 {
     fn from(value: BufferIndex<T>) -> Self {
         value.index
     }

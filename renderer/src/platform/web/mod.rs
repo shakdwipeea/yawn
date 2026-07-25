@@ -1,7 +1,9 @@
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 
 pub mod worker;
 
+#[cfg(target_arch = "wasm32")]
 pub fn get_canvas_element(selectors: &str) -> web_sys::HtmlCanvasElement {
     let window = web_sys::window().unwrap();
     let document = window.document().unwrap();
@@ -13,4 +15,9 @@ pub fn get_canvas_element(selectors: &str) -> web_sys::HtmlCanvasElement {
     canvas.set_width(width);
     canvas.set_height(height);
     canvas
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn get_canvas_element(_selectors: &str) -> web_sys::HtmlCanvasElement {
+    panic!("platform::web::get_canvas_element is only available on wasm32");
 }
